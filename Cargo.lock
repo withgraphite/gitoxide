@@ -1605,6 +1605,8 @@ dependencies = [
 name = "gix-blame"
 version = "0.15.0"
 dependencies = [
+ "criterion",
+ "gix",
  "gix-commitgraph",
  "gix-date",
  "gix-diff",
