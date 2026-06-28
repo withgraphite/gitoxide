@@ -141,19 +141,30 @@ pub(crate) mod index_lookup {
             prefix: gix_hash::Prefix,
             candidates: Option<&mut HashSet<gix_hash::ObjectId>>,
         ) -> Option<crate::store::prefix::lookup::Outcome> {
-            let mut candidate_entries = candidates.as_ref().map(|_| 0..0);
             let res = match &self.file {
                 handle::SingleOrMultiIndex::Single { index, .. } => {
-                    index.lookup_prefix(prefix, candidate_entries.as_mut())
+                    let mut entries = 0..0;
+                    let res = index.lookup_prefix(prefix, candidates.as_ref().map(|_| &mut entries))?;
+                    if let Some(candidates) = candidates {
+                        candidates.extend(entries.map(|entry| self.oid_at_index(entry).to_owned()));
+                    }
+                    res
                 }
                 handle::SingleOrMultiIndex::Multi { index, .. } => {
-                    index.lookup_prefix(prefix, candidate_entries.as_mut())
+                    // multi-pack index chains yield one range of matching entries per layer.
+                    let mut ranges = Vec::new();
+                    let res = index.lookup_prefix(prefix, candidates.as_ref().map(|_| &mut ranges))?;
+                    if let Some(candidates) = candidates {
+                        candidates.extend(
+                            ranges
+                                .into_iter()
+                                .flatten()
+                                .map(|entry| self.oid_at_index(entry).to_owned()),
+                        );
+                    }
+                    res
                 }
-            }?;
-
-            if let Some((candidates, entries)) = candidates.zip(candidate_entries) {
-                candidates.extend(entries.map(|entry| self.oid_at_index(entry).to_owned()));
-            }
+            };
             Some(res.map(|entry_index| self.oid_at_index(entry_index).to_owned()))
         }
 

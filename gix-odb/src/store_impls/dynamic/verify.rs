@@ -36,6 +36,8 @@ pub mod integrity {
         #[error(transparent)]
         MultiIndexOpen(#[from] pack::multi_index::init::Error),
         #[error(transparent)]
+        MultiIndexChainOpen(#[from] pack::multi_index::chain::Error),
+        #[error(transparent)]
         PackOpen(#[from] pack::data::init::Error),
         #[error(transparent)]
         InitializeODB(#[from] crate::store::load_index::Error),
@@ -198,7 +200,18 @@ impl super::Store {
                         let index = match bundle.multi_index.loaded() {
                             Some(index) => index.deref(),
                             None => {
-                                index = pack::multi_index::File::at(bundle.multi_index.path(), self.alloc_limit_bytes)?;
+                                let path = bundle.multi_index.path();
+                                index =
+                                    pack::multi_index::File::at_path(path, self.alloc_limit_bytes).map_err(|err| {
+                                        match err {
+                                            pack::multi_index::open::Error::Standalone(err) => {
+                                                integrity::Error::MultiIndexOpen(err)
+                                            }
+                                            pack::multi_index::open::Error::Chain(err) => {
+                                                integrity::Error::MultiIndexChainOpen(err)
+                                            }
+                                        }
+                                    })?;
                                 &index
                             }
                         };
@@ -208,9 +221,9 @@ impl super::Store {
                         );
                         let outcome = index.verify_integrity(&mut child_progress, should_interrupt, options.clone())?;
 
-                        let index_dir = bundle.multi_index.path().parent().expect("file in a directory");
+                        let index_dir = index.pack_dir();
                         statistics.push(IndexStatistics {
-                            path: Default::default(),
+                            path: index.path().to_owned(),
                             statistics: SingleOrMultiStatistics::Multi(
                                 outcome
                                     .pack_traverse_statistics

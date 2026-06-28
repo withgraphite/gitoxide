@@ -106,7 +106,7 @@ impl Store {
                     crate::alternate::resolve(objects_dir.clone(), &current_dir).map_err(std::io::Error::other)?;
                 db_paths.insert(0, objects_dir.clone());
                 let num_slots =
-                    Store::collect_indices_and_mtime_sorted_by_size(db_paths, None, None, alloc_limit_bytes)
+                    Store::collect_indices_and_mtime_sorted_by_size(db_paths, None, None, alloc_limit_bytes, None)
                         .map_err(std::io::Error::other)?
                         .len();
 

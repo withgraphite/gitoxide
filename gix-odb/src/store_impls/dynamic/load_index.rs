@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, VecDeque},
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
+    io::{Read, Seek, SeekFrom},
     ops::Deref,
     path::{Path, PathBuf},
     sync::{
@@ -19,6 +20,13 @@ pub(crate) struct Snapshot {
     pub(crate) loose_dbs: Arc<Vec<crate::loose::Store>>,
     /// remember what this state represents and to compare to other states.
     pub(crate) marker: types::SlotIndexMarker,
+}
+
+#[derive(Clone)]
+pub(crate) struct CachedMultiIndex {
+    file: Arc<gix_pack::multi_index::File>,
+    identity: types::MultiIndexIdentity,
+    covered_index_names: Arc<std::collections::HashSet<OsString>>,
 }
 
 mod error {
@@ -238,11 +246,30 @@ impl super::Store {
             Arc::clone(&index.loose_dbs)
         };
 
+        let cached_multi_indices: BTreeMap<_, _> = index
+            .slot_indices
+            .iter()
+            .filter_map(|&slot_idx| {
+                let files = self.files[slot_idx].files.load_full();
+                let types::IndexAndPacks::MultiIndex(bundle) = files.as_ref().as_ref()? else {
+                    return None;
+                };
+                Some((
+                    bundle.multi_index.path().to_owned(),
+                    CachedMultiIndex {
+                        file: Arc::clone(bundle.multi_index.loaded()?),
+                        identity: bundle.identity.clone(),
+                        covered_index_names: Arc::clone(&bundle.covered_index_names),
+                    },
+                ))
+            })
+            .collect();
         let indices_by_modification_time = Self::collect_indices_and_mtime_sorted_by_size(
             db_paths,
             index.slot_indices.len().into(),
             self.use_multi_pack_index.then_some(self.object_hash),
             self.alloc_limit_bytes,
+            Some(&cached_multi_indices),
         )?;
         let mut idx_by_index_path: BTreeMap<_, _> = index
             .slot_indices
@@ -269,7 +296,8 @@ impl super::Store {
                     let files_guard = slot.files.load();
                     let files =
                         Option::as_ref(&files_guard).expect("slot is set or we wouldn't know it points to this file");
-                    if index_info.is_multi_index() && files.mtime() != mtime {
+                    if index_info.is_multi_index() && files.multi_index_identity() != index_info.multi_index_identity()
+                    {
                         // we have a changed multi-pack index. We can't just change the existing slot as it may alter slot indices
                         // that are currently available. Instead, we have to move what's there into a new slot, along with the changes,
                         // and later free the slot or dispose of the index in the slot (like we do for removed/missing files).
@@ -448,11 +476,12 @@ impl super::Store {
         initial_capacity: Option<usize>,
         multi_pack_index_object_hash: Option<gix_hash::Kind>,
         alloc_limit_bytes: Option<usize>,
+        cached_multi_indices: Option<&BTreeMap<PathBuf, CachedMultiIndex>>,
     ) -> Result<Vec<(Either, SystemTime, u64)>, Error> {
         let mut indices_by_modification_time = Vec::with_capacity(initial_capacity.unwrap_or_default());
         for db_path in db_paths {
             let packs = db_path.join("pack");
-            let entries = match std::fs::read_dir(packs) {
+            let entries = match std::fs::read_dir(&packs) {
                 Ok(e) => e,
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(err) => return Err(err.into()),
@@ -469,44 +498,41 @@ impl super::Store {
                 .map(|(p, md)| md.modified().map_err(Error::from).map(|mtime| (p, mtime, md.len())))
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let multi_index_info = multi_pack_index_object_hash
-                .and_then(|hash| {
-                    indices.iter().find_map(|(p, a, b)| {
-                        is_multipack_index(p)
-                            .then(|| {
-                                // we always open the multi-pack here to be able to remove indices
-                                gix_pack::multi_index::File::at(p, alloc_limit_bytes)
-                                    .ok()
-                                    .filter(|midx| midx.object_hash() == hash)
-                                    .map(|midx| (midx, *a, *b))
-                            })
-                            .flatten()
-                            .map(|t| {
-                                if t.0.num_indices() > PackId::max_packs_in_multi_index() {
-                                    Err(Error::TooManyPacksInMultiIndex {
-                                        index_path: p.to_owned(),
-                                        actual: t.0.num_indices(),
-                                        limit: PackId::max_packs_in_multi_index(),
-                                    })
-                                } else {
-                                    Ok(t)
-                                }
-                            })
-                    })
-                })
-                .transpose()?;
+            let mut multi_index_info = None;
+            if let Some(hash) = multi_pack_index_object_hash {
+                if let Some((path, mtime, file_len)) = indices.iter().find(|(path, _, _)| is_multipack_index(path)) {
+                    multi_index_info = standalone_multi_index_candidate(
+                        path,
+                        *mtime,
+                        *file_len,
+                        hash,
+                        alloc_limit_bytes,
+                        cached_multi_indices.and_then(|cached| cached.get(path)),
+                    )?;
+                }
+                if multi_index_info.is_none() {
+                    let chain_path = packs
+                        .join(gix_pack::multi_index::chain::DIRECTORY)
+                        .join(gix_pack::multi_index::chain::CHAIN_FILE);
+                    multi_index_info = chain_multi_index_candidate(
+                        &chain_path,
+                        hash,
+                        alloc_limit_bytes,
+                        cached_multi_indices.and_then(|cached| cached.get(&chain_path)),
+                    )?;
+                }
+            }
             if let Some((multi_index, mtime, flen)) = multi_index_info {
-                let index_names_in_multi_index: Vec<_> = multi_index.index_names().iter().map(AsRef::as_ref).collect();
+                let covered_index_names = multi_index.covered_index_names().expect("multi-index candidate");
                 let mut indices_not_in_multi_index: Vec<(Either, _, _)> = indices
                     .into_iter()
                     .filter_map(|(path, a, b)| {
-                        (path != multi_index.path()
-                            && !index_names_in_multi_index
-                                .contains(&Path::new(path.file_name().expect("file name present"))))
+                        (!is_multipack_index(&path)
+                            && !covered_index_names.contains(path.file_name().expect("file name present")))
                         .then_some((Either::IndexPath(path), a, b))
                     })
                     .collect();
-                indices_not_in_multi_index.insert(0, (Either::MultiIndexFile(Arc::new(multi_index)), mtime, flen));
+                indices_not_in_multi_index.insert(0, (multi_index, mtime, flen));
                 indices_by_modification_time.extend(indices_not_in_multi_index);
             } else {
                 indices_by_modification_time.extend(
@@ -516,15 +542,19 @@ impl super::Store {
                 );
             }
         }
-        // Unlike libgit2, do not sort by modification date, but by size and put the biggest indices first. That way
-        // the chance to hit an object should be higher. We leave it to the handle to sort by LRU.
+        // Prefer multi-pack indices like Git, then put the biggest remaining indices first. That way the chance to hit
+        // an object should be higher. We leave it to the handle to sort by LRU.
         // Git itself doesn't change the order which may save time, but we want it to be stable which also helps some tests.
         // NOTE: this will work well for well-packed repos or those using geometric repacking, but force us to open a lot
         //       of files when dealing with new objects, as there is no notion of recency here as would be with unmaintained
         //       repositories. Different algorithms should be provided, like newest packs first, and possibly a mix of both
         //       with big packs first, then sorting by recency for smaller packs.
         //       We also want to implement `fetch.unpackLimit` to alleviate this issue a little.
-        indices_by_modification_time.sort_by(|l, r| l.2.cmp(&r.2).reverse());
+        indices_by_modification_time.sort_by(|l, r| {
+            r.0.is_multi_index()
+                .cmp(&l.0.is_multi_index())
+                .then_with(|| l.2.cmp(&r.2).reverse())
+        });
         Ok(indices_by_modification_time)
     }
 
@@ -604,30 +634,21 @@ impl super::Store {
                     index_info.path(),
                     "Parallel writers cannot change the file the slot points to."
                 );
-                if bundle.is_disposable() {
-                    // put it into the correct mode, it's now available for sure so should not be missing or garbage.
-                    // The latter can happen if files are removed and put back for some reason, but we should definitely
-                    // have them in a decent state now that we know/think they are there.
+                let index_is_loaded = bundle.index_is_loaded();
+                if bundle.is_disposable() || bundle.mtime() != mtime {
                     let _lock = slot.write.lock();
                     let mut files = slot.files.load_full();
                     let files_mut = Arc::make_mut(&mut files)
                         .as_mut()
                         .expect("BUG: cannot change from something to nothing, would be race");
-                    files_mut.put_back();
-                    debug_assert_eq!(
-                        files_mut.mtime(),
-                        mtime,
-                        "BUG: we can only put back files that didn't obviously change"
-                    );
-                    // Safety: can't race as we hold the lock, must be set before replacing the data.
-                    // NOTE that we don't change the generation as it's still the very same index we talk about, it doesn't change
-                    // identity.
+                    if files_mut.is_disposable() {
+                        files_mut.put_back();
+                    }
+                    files_mut.set_mtime(mtime);
                     slot.generation.store(current_generation, Ordering::SeqCst);
                     slot.files.store(files);
-                } else {
-                    // it's already in the correct state, either loaded or unloaded.
                 }
-                bundle.index_is_loaded()
+                index_is_loaded
             }
             None => {
                 unreachable!(
@@ -694,6 +715,149 @@ fn is_multipack_index(path: &Path) -> bool {
     path.file_name() == Some(OsStr::new("multi-pack-index"))
 }
 
+fn standalone_multi_index_candidate(
+    path: &Path,
+    mtime: SystemTime,
+    file_len: u64,
+    object_hash: gix_hash::Kind,
+    alloc_limit_bytes: Option<usize>,
+    cached: Option<&CachedMultiIndex>,
+) -> Result<Option<(Either, SystemTime, u64)>, Error> {
+    for _ in 0..2 {
+        let checksum = match standalone_multi_index_identity(path, object_hash) {
+            Ok(checksum) => checksum,
+            Err(_) => return Ok(None),
+        };
+        let identity = types::MultiIndexIdentity::Standalone(checksum);
+        if let Some(candidate) = cached_candidate(cached, &identity) {
+            return Ok(Some((candidate, mtime, file_len)));
+        }
+        let file = match gix_pack::multi_index::File::at(path, alloc_limit_bytes) {
+            Ok(file) if file.object_hash() == object_hash => file,
+            Ok(_) | Err(_) => return Ok(None),
+        };
+        if file.checksum() != checksum {
+            continue;
+        }
+        return new_candidate(file, identity, path).map(|candidate| Some((candidate, mtime, file_len)));
+    }
+    Ok(None)
+}
+
+fn chain_multi_index_candidate(
+    path: &Path,
+    object_hash: gix_hash::Kind,
+    alloc_limit_bytes: Option<usize>,
+    cached: Option<&CachedMultiIndex>,
+) -> Result<Option<(Either, SystemTime, u64)>, Error> {
+    let metadata = match path.metadata() {
+        Ok(metadata) if metadata.file_type().is_file() => metadata,
+        Ok(_) | Err(_) => return Ok(None),
+    };
+    let mtime = match metadata.modified() {
+        Ok(mtime) => mtime,
+        Err(_) => return Ok(None),
+    };
+    let chain_data = match read_chain_data(path, alloc_limit_bytes) {
+        Ok(data) => data,
+        Err(_err) => {
+            gix_features::trace::error!(err=?_err, "Failed to read multi-pack index chain - falling back to pack indices");
+            return Ok(None);
+        }
+    };
+    let identity = types::MultiIndexIdentity::Chain(Arc::clone(&chain_data));
+    if let Some(candidate) = cached_candidate(cached, &identity) {
+        return Ok(Some((candidate, mtime, metadata.len())));
+    }
+    match gix_pack::multi_index::File::at_chain_with_data(path, &chain_data, alloc_limit_bytes) {
+        Ok(file) if file.object_hash() == object_hash => {
+            new_candidate(file, identity, path).map(|candidate| Some((candidate, mtime, metadata.len())))
+        }
+        Ok(_file) => {
+            gix_features::trace::error!(
+                actual = ?_file.object_hash(),
+                expected = ?object_hash,
+                "Ignoring multi-pack index chain with unexpected object hash"
+            );
+            Ok(None)
+        }
+        Err(_err) => {
+            gix_features::trace::error!(err=?_err, "Failed to load multi-pack index chain - falling back to pack indices");
+            Ok(None)
+        }
+    }
+}
+
+fn standalone_multi_index_identity(path: &Path, object_hash: gix_hash::Kind) -> std::io::Result<gix_hash::ObjectId> {
+    let hash_len = object_hash.len_in_bytes();
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let hash_len_u64 = hash_len as u64;
+    if len < hash_len_u64 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "multi-pack index is shorter than its checksum",
+        ));
+    }
+    file.seek(SeekFrom::Start(len - hash_len_u64))?;
+    let mut checksum = vec![0; hash_len];
+    file.read_exact(&mut checksum)?;
+    Ok(gix_hash::ObjectId::from_bytes_or_panic(&checksum))
+}
+
+fn read_chain_data(path: &Path, alloc_limit_bytes: Option<usize>) -> std::io::Result<Arc<[u8]>> {
+    let file = std::fs::File::open(path)?;
+    let mut data = Vec::new();
+    match alloc_limit_bytes {
+        Some(limit) => {
+            file.take(limit.saturating_add(1) as u64).read_to_end(&mut data)?;
+            if data.len() > limit {
+                return Err(std::io::Error::other("multi-pack index chain exceeds allocation limit"));
+            }
+        }
+        None => {
+            file.take(u64::MAX).read_to_end(&mut data)?;
+        }
+    }
+    Ok(data.into())
+}
+
+fn cached_candidate(cached: Option<&CachedMultiIndex>, identity: &types::MultiIndexIdentity) -> Option<Either> {
+    let cached = cached.filter(|cached| &cached.identity == identity)?;
+    Some(Either::MultiIndexFile {
+        file: Arc::clone(&cached.file),
+        identity: cached.identity.clone(),
+        covered_index_names: Arc::clone(&cached.covered_index_names),
+    })
+}
+
+fn new_candidate(
+    file: gix_pack::multi_index::File,
+    identity: types::MultiIndexIdentity,
+    path: &Path,
+) -> Result<Either, Error> {
+    reject_too_many_packs_in_multi_index(&file, path)?;
+    let file = Arc::new(file);
+    let covered_index_names = IndexAndPacks::index_names_set(&file);
+    Ok(Either::MultiIndexFile {
+        file,
+        identity,
+        covered_index_names,
+    })
+}
+
+fn reject_too_many_packs_in_multi_index(midx: &gix_pack::multi_index::File, path: &Path) -> Result<(), Error> {
+    if midx.num_indices() > PackId::max_packs_in_multi_index() {
+        Err(Error::TooManyPacksInMultiIndex {
+            index_path: path.to_owned(),
+            actual: midx.num_indices(),
+            limit: PackId::max_packs_in_multi_index(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
 struct IncOnNewAndDecOnDrop<'a>(&'a AtomicU16);
 impl<'a> IncOnNewAndDecOnDrop<'a> {
     pub fn new(v: &'a AtomicU16) -> Self {
@@ -709,26 +873,50 @@ impl Drop for IncOnNewAndDecOnDrop<'_> {
 
 pub(crate) enum Either {
     IndexPath(PathBuf),
-    MultiIndexFile(Arc<gix_pack::multi_index::File>),
+    MultiIndexFile {
+        file: Arc<gix_pack::multi_index::File>,
+        identity: types::MultiIndexIdentity,
+        covered_index_names: Arc<std::collections::HashSet<OsString>>,
+    },
 }
 
 impl Either {
     fn path(&self) -> &Path {
         match self {
             Either::IndexPath(p) => p,
-            Either::MultiIndexFile(f) => f.path(),
+            Either::MultiIndexFile { file, .. } => file.path(),
         }
     }
 
     fn into_index_and_packs(self, mtime: SystemTime) -> IndexAndPacks {
         match self {
             Either::IndexPath(path) => IndexAndPacks::new_single(path, mtime),
-            Either::MultiIndexFile(file) => IndexAndPacks::new_multi_from_open_file(file, mtime),
+            Either::MultiIndexFile {
+                file,
+                identity,
+                covered_index_names,
+            } => IndexAndPacks::new_multi_from_open_file(file, mtime, identity, covered_index_names),
         }
     }
 
     fn is_multi_index(&self) -> bool {
-        matches!(self, Either::MultiIndexFile(_))
+        matches!(self, Either::MultiIndexFile { .. })
+    }
+
+    fn multi_index_identity(&self) -> Option<&types::MultiIndexIdentity> {
+        match self {
+            Either::IndexPath(_) => None,
+            Either::MultiIndexFile { identity, .. } => Some(identity),
+        }
+    }
+
+    fn covered_index_names(&self) -> Option<&std::collections::HashSet<OsString>> {
+        match self {
+            Either::IndexPath(_) => None,
+            Either::MultiIndexFile {
+                covered_index_names, ..
+            } => Some(covered_index_names),
+        }
     }
 }
 
