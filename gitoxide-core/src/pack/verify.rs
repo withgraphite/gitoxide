@@ -157,8 +157,10 @@ where
             .with_context(|| "Verification failure")?
         }
         "" => match path.file_name() {
-            Some(file_name) if file_name == "multi-pack-index" => {
-                let multi_index = gix::odb::pack::multi_index::File::at(path, None)?;
+            Some(file_name)
+                if file_name == "multi-pack-index" || file_name == gix::odb::pack::multi_index::chain::CHAIN_FILE =>
+            {
+                let multi_index = gix::odb::pack::multi_index::File::at_path(path, None)?;
                 let res = multi_index.verify_integrity(
                     &mut progress,
                     should_interrupt,
@@ -171,7 +173,7 @@ where
                 )?;
                 match output_statistics {
                     Some(OutputFormat::Human) => {
-                        for (index_name, stats) in multi_index.index_names().iter().zip(res.pack_traverse_statistics) {
+                        for (index_name, stats) in multi_index.index_names().zip(res.pack_traverse_statistics) {
                             writeln!(out, "{}", index_name.display()).ok();
                             drop(print_statistics(&mut out, &stats));
                         }
@@ -181,7 +183,6 @@ where
                         out,
                         &multi_index
                             .index_names()
-                            .iter()
                             .zip(res.pack_traverse_statistics)
                             .collect::<Vec<_>>(),
                     )?,
