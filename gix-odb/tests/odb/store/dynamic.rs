@@ -157,17 +157,17 @@ fn multi_index_access() -> crate::Result {
         handle.store_ref().metrics(),
         gix_odb::store::Metrics {
             num_handles: 1,
-            num_refreshes: 2 + 1 /*legit refresh with changes*/ + 1, /*a refresh attempt with no changes, causing 'contains()' to give up*/
+            num_refreshes: 3,
             open_reachable_indices: 1,
             known_reachable_indices: 1,
-            open_reachable_packs: 0,
+            open_reachable_packs: expected.packs,
             known_packs: expected.packs,
             unused_slots: 31,
             loose_dbs: 1,
             unreachable_indices: 0,
             unreachable_packs: 0
         },
-        "everything seems to remain as it was, even though we moved our multi-index to a new slot and removed the old one"
+        "changing only the mtime does not reopen an identical multi-index"
     );
 
     assert_eq!(handle.store_ref().structure()?.len(), 2);
@@ -209,6 +209,374 @@ fn multi_index_alloc_limit_bytes_falls_back_to_plain_indices() -> crate::Result 
     );
     assert_eq!(metrics.known_packs, expected.packs);
     Ok(())
+}
+
+mod multi_index_chain {
+    use std::path::{Path, PathBuf};
+
+    use gix_object::{Exists, FindExt};
+    use gix_odb::store::structure::Record;
+    use gix_pack::Find;
+
+    use super::expected_pack_metrics;
+
+    /// Return true if the fixture cannot be generated as `git multi-pack-index write --incremental`
+    /// requires git 2.47 or newer.
+    ///
+    /// Note that [`gix_testtools::should_skip_as_git_version_is_smaller_than()`] cannot be used here
+    /// as it never skips on CI, where some jobs regenerate all fixtures with a git older than 2.47.
+    fn should_skip_as_git_cannot_write_chains() -> bool {
+        *gix_testtools::GIT_VERSION < (2, 47, 0)
+    }
+
+    fn writable_repo() -> crate::Result<(gix_testtools::tempfile::TempDir, PathBuf)> {
+        let dir = crate::scripted_fixture_writable("make_repo_multi_index_chain.sh")?;
+        let repo = dir.path().join("repo");
+        Ok((dir, repo))
+    }
+
+    fn v2_repo_path() -> crate::Result<PathBuf> {
+        Ok(gix_testtools::scripted_fixture_read_only_needs_archive("make_repo_multi_index_chain_v2.sh")?.join("repo"))
+    }
+
+    /// Open the store at `repo` with the object hash the fixture was generated with.
+    fn store_at(repo: &Path) -> crate::Result<gix_odb::Handle> {
+        Ok(gix_odb::at_opts(
+            repo.join(".git/objects"),
+            Vec::new(),
+            gix_odb::store::init::Options {
+                object_hash: gix_testtools::object_hash(),
+                ..Default::default()
+            },
+        )?)
+    }
+
+    fn pack_dir(repo: &Path) -> PathBuf {
+        repo.join(".git/objects/pack")
+    }
+
+    fn chain_file(repo: &Path) -> PathBuf {
+        pack_dir(repo).join("multi-pack-index.d/multi-pack-index-chain")
+    }
+
+    fn all_object_ids_per_git(repo: &Path) -> crate::Result<Vec<gix_hash::ObjectId>> {
+        Ok(std::fs::read_to_string(repo.join("all-objects"))?
+            .lines()
+            .map(|hex| gix_hash::ObjectId::from_hex(hex.as_bytes()).expect("valid hash"))
+            .collect())
+    }
+
+    fn assert_all_objects_findable(handle: &gix_odb::Handle, repo: &Path) -> crate::Result {
+        let mut buf = Vec::new();
+        for oid in all_object_ids_per_git(repo)? {
+            assert!(handle.exists(&oid), "object {oid} can be found");
+            handle.find(&oid, &mut buf)?;
+        }
+        Ok(())
+    }
+
+    /// The single path of all multi-index records within the store structure.
+    fn multi_index_paths(handle: &gix_odb::Handle) -> Vec<PathBuf> {
+        handle
+            .store_ref()
+            .structure()
+            .expect("structure can be read")
+            .into_iter()
+            .filter_map(|record| match record {
+                Record::MultiIndex { path, .. } => Some(path),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Remove a file even on Windows, where files written by git may carry the read-only attribute.
+    fn remove_file(path: &Path) -> std::io::Result<()> {
+        let mut perms = std::fs::metadata(path)?.permissions();
+        if perms.readonly() {
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            std::fs::set_permissions(path, perms)?;
+        }
+        std::fs::remove_file(path)
+    }
+
+    #[test]
+    fn lookup_and_refresh() -> crate::Result {
+        if should_skip_as_git_cannot_write_chains() {
+            return Ok(());
+        }
+        let (_dir, repo) = writable_repo()?;
+        let expected = expected_pack_metrics(&repo)?;
+        let handle = store_at(&repo)?;
+
+        let mut count = 0;
+        let mut buf = Vec::new();
+        for oid in handle.iter()? {
+            let oid = oid?;
+            assert!(handle.exists(&oid));
+            handle.find(&oid, &mut buf)?;
+            count += 1;
+        }
+        assert_eq!(count, expected.objects, "all objects of all layers are enumerated");
+        assert_all_objects_findable(&handle, &repo)?;
+
+        let metrics = handle.store_ref().metrics();
+        assert_eq!(
+            metrics.known_reachable_indices, 1,
+            "the entire chain is contained in a single multi-index slot"
+        );
+        assert_eq!(
+            metrics.known_packs, expected.packs,
+            "the multi-index refers to the packs of all layers"
+        );
+        assert_eq!(
+            multi_index_paths(&handle),
+            vec![chain_file(&repo)],
+            "the multi-index slot is identified by the path of the chain file"
+        );
+
+        // An mtime-only change triggers discovery without replacing the content-identical chain.
+        filetime::set_file_mtime(chain_file(&repo), filetime::FileTime::now())?;
+        let refreshes_before = handle.store_ref().metrics().num_refreshes;
+        handle.exists(&gix_hash::ObjectId::null(handle.store_ref().object_hash()));
+        assert!(
+            handle.store_ref().metrics().num_refreshes > refreshes_before,
+            "an object miss triggers a refresh which sees the changed chain file"
+        );
+        assert_all_objects_findable(&handle, &repo)?;
+        assert_eq!(
+            multi_index_paths(&handle),
+            vec![chain_file(&repo)],
+            "the unchanged chain remains the only multi-index"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn appended_chain_is_refreshed_when_mtime_is_unchanged() -> crate::Result {
+        if should_skip_as_git_cannot_write_chains() {
+            return Ok(());
+        }
+        let (_dir, repo) = writable_repo()?;
+        let handle = store_at(&repo)?;
+        assert_all_objects_findable(&handle, &repo)?;
+
+        let chain_path = chain_file(&repo);
+        let old_mtime = filetime::FileTime::from_last_modification_time(&std::fs::metadata(&chain_path)?);
+        std::fs::write(repo.join("new-object"), "new object\n")?;
+        gix_testtools::git(&repo, "add new-object")?;
+        gix_testtools::git(&repo, "commit -m 'new layer'")?;
+        gix_testtools::git(&repo, "repack -d")?;
+        gix_testtools::git(&repo, "-c midx.version=1 multi-pack-index write --incremental")?;
+        let new_commit = gix_hash::ObjectId::from_hex(gix_testtools::git(&repo, "rev-parse HEAD")?.trim().as_bytes())?;
+        filetime::set_file_mtime(&chain_path, old_mtime)?;
+
+        assert!(
+            handle.exists(&new_commit),
+            "the changed chain content is detected independently of its mtime"
+        );
+        assert_eq!(
+            multi_index_paths(&handle),
+            vec![chain_path],
+            "the new pack remains covered by the refreshed chain"
+        );
+        assert_eq!(handle.store_ref().metrics().known_reachable_indices, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn unchanged_chain_reuses_mapped_layers_during_refresh() -> crate::Result {
+        if should_skip_as_git_cannot_write_chains() {
+            return Ok(());
+        }
+        let (_dir, repo) = writable_repo()?;
+        let handle = store_at(&repo)?;
+        let first_oid = all_object_ids_per_git(&repo)?
+            .into_iter()
+            .next()
+            .expect("fixture has objects");
+        assert!(handle.exists(&first_oid));
+
+        let chain_path = chain_file(&repo);
+        for entry in std::fs::read_dir(chain_path.parent().expect("chain directory"))? {
+            let path = entry?.path();
+            if path.extension() == Some(std::ffi::OsStr::new("midx")) {
+                std::fs::rename(&path, path.with_extension("removed"))?;
+            }
+        }
+
+        assert!(!handle.exists(&gix_hash::ObjectId::null(handle.store_ref().object_hash())));
+        assert!(handle.exists(&first_oid), "the existing mappings remain usable");
+        assert_eq!(
+            handle.store_ref().metrics().known_reachable_indices,
+            1,
+            "an unchanged chain does not fall back to per-pack indices"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn equal_size_chain_rewrite_is_detected_from_content() -> crate::Result {
+        if should_skip_as_git_cannot_write_chains() {
+            return Ok(());
+        }
+        let (_dir, repo) = writable_repo()?;
+        let mut handle = store_at(&repo)?;
+        handle.prevent_pack_unload();
+
+        let chain_path = chain_file(&repo);
+        let index = gix_pack::multi_index::File::at_chain(&chain_path, None)?;
+        let oid = index.oid_at_index(0).to_owned();
+        let mut buf = Vec::new();
+        let before = handle.location_by_oid(&oid, &mut buf).expect("object is packed");
+
+        let old_mtime = filetime::FileTime::from_last_modification_time(&std::fs::metadata(&chain_path)?);
+        let chain = std::fs::read_to_string(&chain_path)?;
+        let mut lines: Vec<_> = chain.lines().collect();
+        lines.swap(0, 1);
+        std::fs::write(&chain_path, format!("{}\n", lines.join("\n")))?;
+        filetime::set_file_mtime(&chain_path, old_mtime)?;
+
+        assert!(!handle.exists(&gix_hash::ObjectId::null(handle.store_ref().object_hash())));
+        let after = handle.location_by_oid(&oid, &mut buf).expect("object remains packed");
+        assert_ne!(
+            before.pack_id, after.pack_id,
+            "the rewritten chain is installed even though its size, mtime, and tip checksum are unchanged"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn chain_precedes_uncovered_pack_indices() -> crate::Result {
+        if should_skip_as_git_cannot_write_chains() {
+            return Ok(());
+        }
+        let (_dir, repo) = writable_repo()?;
+        std::fs::write(repo.join("not-in-chain"), "new pack\n")?;
+        gix_testtools::git(&repo, "add not-in-chain")?;
+        gix_testtools::git(&repo, "commit -m 'uncovered pack'")?;
+        gix_testtools::git(&repo, "repack -d")?;
+
+        let handle = store_at(&repo)?;
+        let structure = handle.store_ref().structure()?;
+        assert!(
+            matches!(structure.get(1), Some(Record::MultiIndex { .. })),
+            "the multi-index is searched before uncovered pack indices: {structure:?}"
+        );
+        assert!(
+            matches!(structure.get(2), Some(Record::Index { .. })),
+            "the uncovered pack remains available after the multi-index: {structure:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn verification_reports_the_chain_path() -> crate::Result {
+        if should_skip_as_git_cannot_write_chains() {
+            return Ok(());
+        }
+        let (_dir, repo) = writable_repo()?;
+        let handle = store_at(&repo)?;
+        let outcome = handle.store_ref().verify_integrity(
+            &mut gix_features::progress::Discard,
+            &std::sync::atomic::AtomicBool::new(false),
+            Default::default(),
+        )?;
+        assert_eq!(outcome.index_statistics.len(), 1);
+        assert_eq!(outcome.index_statistics[0].path, chain_file(&repo));
+        Ok(())
+    }
+
+    #[test]
+    fn version_2_compacted_chain_is_used_as_one_index() -> crate::Result {
+        let repo = v2_repo_path()?;
+        let expected = expected_pack_metrics(&repo)?;
+        let handle = store_at(&repo)?;
+
+        assert_all_objects_findable(&handle, &repo)?;
+        assert_eq!(handle.store_ref().metrics().known_reachable_indices, 1);
+        assert_eq!(handle.store_ref().metrics().known_packs, expected.packs);
+        assert_eq!(multi_index_paths(&handle), vec![chain_file(&repo)]);
+        Ok(())
+    }
+
+    #[test]
+    fn standalone_multi_pack_index_wins_over_chain() -> crate::Result {
+        if should_skip_as_git_cannot_write_chains() {
+            return Ok(());
+        }
+        let (dir, repo) = writable_repo()?;
+        let flat_path = pack_dir(&repo).join("multi-pack-index");
+        std::fs::copy(dir.path().join("multi-pack-index-flat"), &flat_path)?;
+
+        let handle = store_at(&repo)?;
+        assert_all_objects_findable(&handle, &repo)?;
+        assert_eq!(
+            multi_index_paths(&handle),
+            vec![flat_path],
+            "the standalone multi-pack index is preferred over the chain, like git reads it first"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn broken_chain_falls_back_to_pack_indices() -> crate::Result {
+        if should_skip_as_git_cannot_write_chains() {
+            return Ok(());
+        }
+        let (_dir, repo) = writable_repo()?;
+        let expected = expected_pack_metrics(&repo)?;
+        let first_layer = std::fs::read_to_string(chain_file(&repo))?
+            .lines()
+            .next()
+            .expect("at least one line")
+            .to_owned();
+        remove_file(
+            &pack_dir(&repo)
+                .join("multi-pack-index.d")
+                .join(format!("multi-pack-index-{first_layer}.midx")),
+        )?;
+
+        let handle = store_at(&repo)?;
+        assert_all_objects_findable(&handle, &repo)?;
+        assert_eq!(
+            multi_index_paths(&handle),
+            Vec::<PathBuf>::new(),
+            "a chain with a missing layer is not used at all"
+        );
+        assert_eq!(
+            handle.store_ref().metrics().known_reachable_indices,
+            expected.packs,
+            "objects are served by the per-pack indices instead"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_after_chain_is_replaced_by_standalone_multi_pack_index() -> crate::Result {
+        if should_skip_as_git_cannot_write_chains() {
+            return Ok(());
+        }
+        let (dir, repo) = writable_repo()?;
+        let handle = store_at(&repo)?;
+        assert_all_objects_findable(&handle, &repo)?;
+        assert_eq!(multi_index_paths(&handle), vec![chain_file(&repo)]);
+
+        // Simulate `git multi-pack-index write` collapsing the chain into a standalone multi-pack index.
+        // The layer files are left in place as they may still be memory-mapped, git would delete them as well.
+        remove_file(&chain_file(&repo))?;
+        let flat_path = pack_dir(&repo).join("multi-pack-index");
+        std::fs::copy(dir.path().join("multi-pack-index-flat"), &flat_path)?;
+
+        handle.exists(&gix_hash::ObjectId::null(handle.store_ref().object_hash()));
+        assert_all_objects_findable(&handle, &repo)?;
+        assert_eq!(
+            multi_index_paths(&handle),
+            vec![flat_path],
+            "the next refresh replaced the chain with the standalone multi-pack index"
+        );
+        Ok(())
+    }
 }
 
 #[test]
@@ -256,22 +624,22 @@ fn multi_index_keep_open() -> crate::Result {
         handle.store_ref().metrics(),
         gix_odb::store::Metrics {
             num_handles: 2,
-            num_refreshes: 3,
+            num_refreshes: 2,
             open_reachable_indices: 1,
             known_reachable_indices: 1,
-            open_reachable_packs: 0, /*no pack is open anymore at least as seen from the index*/
+            open_reachable_packs: 1,
             known_packs: expected.packs,
-            unused_slots: 30,
+            unused_slots: 31,
             loose_dbs: 1,
-            unreachable_indices: 1,
-            unreachable_packs: 1
+            unreachable_indices: 0,
+            unreachable_packs: 0
         },
-        "now there is an unreachable index and pack which is still loaded, but whose pack hasn't been loaded"
+        "an unchanged multi-index and its loaded pack remain reachable"
     );
 
     assert!(
         gix_odb::pack::Find::entry_by_location(&stable_handle, &location).is_some(),
-        "the entry can still be found even though the location is invalid"
+        "the entry can still be found at its stable location"
     );
     assert_eq!(handle.store_ref().structure()?.len(), 2);
     Ok(())

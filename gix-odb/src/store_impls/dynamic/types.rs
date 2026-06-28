@@ -1,4 +1,6 @@
 use std::{
+    collections::HashSet,
+    ffi::OsString,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -211,6 +213,10 @@ impl<T: Clone> OnDiskFile<T> {
         }
     }
 
+    pub(crate) fn set_mtime(&mut self, mtime: SystemTime) {
+        self.mtime = mtime;
+    }
+
     pub fn put_back(&mut self) {
         match std::mem::replace(&mut self.state, OnDiskFileState::Missing) {
             OnDiskFileState::Garbage(v) => self.state = OnDiskFileState::Loaded(v),
@@ -239,6 +245,14 @@ pub(crate) struct IndexFileBundle {
 pub(crate) struct MultiIndexFileBundle {
     pub multi_index: OnDiskFile<Arc<gix_pack::multi_index::File>>,
     pub data: Vec<OnDiskFile<Arc<gix_pack::data::File>>>,
+    pub identity: MultiIndexIdentity,
+    pub covered_index_names: Arc<HashSet<OsString>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum MultiIndexIdentity {
+    Standalone(gix_hash::ObjectId),
+    Chain(Arc<[u8]>),
 }
 
 #[derive(Clone)]
@@ -260,6 +274,23 @@ impl IndexAndPacks {
         match self {
             IndexAndPacks::Index(index) => index.index.mtime,
             IndexAndPacks::MultiIndex(index) => index.multi_index.mtime,
+        }
+    }
+
+    pub(crate) fn multi_index_identity(&self) -> Option<&MultiIndexIdentity> {
+        match self {
+            IndexAndPacks::Index(_) => None,
+            IndexAndPacks::MultiIndex(index) => Some(&index.identity),
+        }
+    }
+
+    pub(crate) fn set_mtime(&mut self, mtime: SystemTime) {
+        match self {
+            IndexAndPacks::Index(index) => {
+                index.index.set_mtime(mtime);
+                index.data.set_mtime(mtime);
+            }
+            IndexAndPacks::MultiIndex(index) => index.multi_index.set_mtime(mtime),
         }
     }
 
@@ -326,16 +357,12 @@ impl IndexAndPacks {
                     })
             }),
             IndexAndPacks::MultiIndex(bundle) => {
-                bundle.multi_index.load_strict(|path| {
-                    gix_pack::multi_index::File::at(path, alloc_limit_bytes)
-                        .map(Arc::new)
-                        .map_err(|err| match err {
-                            gix_pack::multi_index::init::Error::Io { source, .. } => source,
-                            err => std::io::Error::other(err),
-                        })
-                })?;
+                bundle
+                    .multi_index
+                    .load_strict(|path| open_multi_index(path, alloc_limit_bytes).map(Arc::new))?;
                 if let Some(multi_index) = bundle.multi_index.loaded() {
                     bundle.data = Self::index_names_to_pack_paths(multi_index);
+                    bundle.covered_index_names = Self::index_names_set(multi_index);
                 }
                 Ok(())
             }
@@ -358,7 +385,12 @@ impl IndexAndPacks {
         })
     }
 
-    pub(crate) fn new_multi_from_open_file(multi_index: Arc<gix_pack::multi_index::File>, mtime: SystemTime) -> Self {
+    pub(crate) fn new_multi_from_open_file(
+        multi_index: Arc<gix_pack::multi_index::File>,
+        mtime: SystemTime,
+        identity: MultiIndexIdentity,
+        covered_index_names: Arc<HashSet<OsString>>,
+    ) -> Self {
         let data = Self::index_names_to_pack_paths(&multi_index);
         Self::MultiIndex(MultiIndexFileBundle {
             multi_index: OnDiskFile {
@@ -367,23 +399,45 @@ impl IndexAndPacks {
                 mtime,
             },
             data,
+            identity,
+            covered_index_names,
         })
+    }
+
+    pub(crate) fn index_names_set(multi_index: &gix_pack::multi_index::File) -> Arc<HashSet<OsString>> {
+        Arc::new(
+            multi_index
+                .index_names()
+                .filter_map(|path| path.file_name().map(OsString::from))
+                .collect(),
+        )
     }
 
     fn index_names_to_pack_paths(
         multi_index: &gix_pack::multi_index::File,
     ) -> Vec<OnDiskFile<Arc<gix_pack::data::File>>> {
-        let parent_dir = multi_index.path().parent().expect("parent present");
+        let pack_dir = multi_index.pack_dir();
         multi_index
             .index_names()
-            .iter()
             .map(|idx| OnDiskFile {
-                path: parent_dir.join(idx.with_extension("pack")).into(),
+                path: pack_dir.join(idx.with_extension("pack")).into(),
                 state: OnDiskFileState::Unloaded,
                 mtime: SystemTime::UNIX_EPOCH,
             })
             .collect()
     }
+}
+
+/// Open the multi-pack index at `path`, which may also be the chain file of a multi-pack index chain.
+pub(crate) fn open_multi_index(
+    path: &Path,
+    alloc_limit_bytes: Option<usize>,
+) -> std::io::Result<gix_pack::multi_index::File> {
+    gix_pack::multi_index::File::at_path(path, alloc_limit_bytes).map_err(|err| match err {
+        gix_pack::multi_index::open::Error::Standalone(gix_pack::multi_index::init::Error::Io { source, .. })
+        | gix_pack::multi_index::open::Error::Chain(gix_pack::multi_index::chain::Error::Io { source, .. }) => source,
+        err => std::io::Error::other(err),
+    })
 }
 
 #[derive(Default)]
