@@ -36,6 +36,8 @@ pub enum Error {
     RejectShallowRemoteConfig(#[from] config::boolean::Error),
     #[error(transparent)]
     NegotiationAlgorithmConfig(#[from] config::key::GenericErrorWithValue),
+    #[error(transparent)]
+    RefTransaction(#[from] gix_ref::store::transaction::Error),
 }
 
 impl gix_protocol::transport::IsSpuriousError for Error {

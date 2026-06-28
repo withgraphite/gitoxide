@@ -65,6 +65,8 @@ pub use gix_testtools::Result;
 
 mod file;
 mod fullname;
+#[cfg(feature = "reftable")]
+mod reftable;
 mod partialname {
     use gix_ref::PartialName;
 

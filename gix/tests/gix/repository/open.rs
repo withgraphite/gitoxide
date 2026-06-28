@@ -1,6 +1,6 @@
 use std::{borrow::Cow, error::Error};
 
-use gix::bstr::BString;
+use gix::bstr::{BString, ByteSlice};
 
 use crate::util::named_subrepo_opts;
 
@@ -60,22 +60,80 @@ fn on_root_with_decomposed_unicode() -> crate::Result {
 }
 
 #[test]
+#[cfg(feature = "reftable")]
 fn non_bare_reftable() -> crate::Result {
-    let repo = match named_subrepo_opts(
-        "make_reftable_repo.sh",
-        "reftable-clone",
-        gix::open::Options::isolated(),
-    ) {
-        Ok(r) => r,
+    let fixture = match gix_testtools::scripted_fixture_writable("make_reftable_repo.sh") {
+        Ok(fixture) => fixture,
         Err(_) if *gix_testtools::GIT_VERSION < (2, 44, 0) => {
             eprintln!("Fixture script failure ignored as it looks like Git isn't recent enough.");
             return Ok(());
         }
         Err(err) => panic!("{err}"),
     };
+    let fixture_repo = fixture.path().join("reftable-clone");
+    for (key, value) in [
+        ("reftable.blockSize", "8192"),
+        ("reftable.restartInterval", "8"),
+        ("reftable.indexObjects", "false"),
+        ("reftable.geometricFactor", "3"),
+        ("reftable.lockTimeout", "0"),
+    ] {
+        let status = std::process::Command::new("git")
+            .args([
+                "-C",
+                fixture_repo.to_str().expect("UTF-8 fixture path"),
+                "config",
+                key,
+                value,
+            ])
+            .status()?;
+        assert!(status.success(), "Git configures {key}");
+    }
+    let repo = gix::ThreadSafeRepository::open_opts(
+        fixture_repo,
+        gix::open::Options::isolated().config_overrides(["user.name=gitoxide", "user.email=gitoxide@example.com"]),
+    )?
+    .to_thread_local();
+    let head_id = repo.head_id()?;
     assert!(
-        repo.head_id().is_err(),
-        "Trying to do anything with head will fail as we don't support reftables yet"
+        repo.find_object(head_id).is_ok(),
+        "reftable HEAD resolves to an object that exists"
+    );
+    let refs = repo
+        .references()?
+        .all()?
+        .map(|reference| reference.map(|reference| reference.name().as_bstr().to_owned()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(
+        refs.iter().all(|name| name.as_bstr() != "HEAD"),
+        "all references exclude pseudo refs"
+    );
+    assert!(
+        refs.iter().any(|name| name.as_bstr() == "refs/heads/main"),
+        "reftable refs include the main branch"
+    );
+    let pseudo = repo
+        .references()?
+        .pseudo()?
+        .map(|reference| reference.map(|reference| reference.name().as_bstr().to_owned()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(
+        pseudo.iter().any(|name| name.as_bstr() == "HEAD"),
+        "pseudo refs include HEAD"
+    );
+    let created = repo
+        .reference(
+            "refs/heads/new",
+            head_id,
+            gix_ref::transaction::PreviousValue::MustNotExist,
+            "create",
+        )
+        .expect("reftable writes are supported");
+    assert_eq!(created.id(), head_id, "created reftable reference points to HEAD");
+    assert_eq!(
+        repo.find_reference("new")?.id(),
+        head_id,
+        "created reference is immediately visible"
     );
     assert!(!repo.is_bare());
     assert_eq!(repo.kind(), gix::repository::Kind::Common);

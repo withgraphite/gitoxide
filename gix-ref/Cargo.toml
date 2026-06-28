@@ -16,10 +16,13 @@ doctest = false
 test = true
 
 [features]
+default = ["reftable"]
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
-sha1 = ["gix-hash/sha1"]
+sha1 = ["gix-hash/sha1", "gix-reftable?/sha1"]
 ## Enable support for the SHA-256 hash by enabling the respective feature in the `gix-hash` crate.
-sha256 = ["gix-hash/sha256"]
+sha256 = ["gix-hash/sha256", "gix-reftable?/sha256"]
+## Enable support for reading and writing reftable-backed reference stores using vendored C.
+reftable = ["dep:gix-reftable"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "gix-hash/serde", "gix-actor/serde", "gix-object/serde"]
 ## Enable support for thread-safety.
@@ -36,6 +39,7 @@ gix-validate = { version = "^0.11.2", path = "../gix-validate" }
 gix-actor = { version = "^0.41.1", path = "../gix-actor" }
 gix-lock = { version = "^23.0.0", path = "../gix-lock" }
 gix-tempfile = { version = "^23.0.0", default-features = false, path = "../gix-tempfile" }
+gix-reftable = { version = "^0.1.0", path = "../gix-reftable", optional = true, default-features = false }
 
 thiserror = "2.0.18"
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
@@ -52,6 +56,7 @@ gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
 gix-discover = { path = "../gix-discover" }
 gix-odb = { path = "../gix-odb" }
 insta = "1.46.3"
+tempfile = "3.26.0"
 
 [package.metadata.docs.rs]
 features = ["sha1", "document-features", "serde"]

@@ -119,7 +119,7 @@ impl ReferenceExt for Reference {
         store: &file::Store,
         objects: &dyn gix_object::Find,
     ) -> Result<ObjectId, peel::to_id::Error> {
-        self.peel_to_id(store, objects)
+        ReferenceExt::peel_to_id(self, store, objects)
     }
 
     fn peel_to_id(
@@ -128,11 +128,11 @@ impl ReferenceExt for Reference {
         objects: &dyn gix_object::Find,
     ) -> Result<ObjectId, peel::to_id::Error> {
         let packed = store.assure_packed_refs_uptodate().map_err(|err| {
-            peel::to_id::Error::FollowToObject(peel::to_object::Error::Follow(file::find::existing::Error::Find(
-                file::find::Error::PackedOpen(err),
-            )))
+            peel::to_id::Error::FollowToObject(peel::to_object::Error::Follow(
+                file::find::existing::Error::Find(file::find::Error::PackedOpen(err)).into(),
+            ))
         })?;
-        self.peel_to_id_packed(store, objects, packed.as_ref().map(|b| &***b))
+        ReferenceExt::peel_to_id_packed(self, store, objects, packed.as_ref().map(|b| &***b))
     }
 
     fn peel_to_id_in_place_packed(
@@ -141,7 +141,7 @@ impl ReferenceExt for Reference {
         objects: &dyn gix_object::Find,
         packed: Option<&packed::Buffer>,
     ) -> Result<ObjectId, peel::to_id::Error> {
-        self.peel_to_id_packed(store, objects, packed)
+        ReferenceExt::peel_to_id_packed(self, store, objects, packed)
     }
 
     fn peel_to_id_packed(
@@ -156,7 +156,7 @@ impl ReferenceExt for Reference {
                 Ok(peeled)
             }
             None => {
-                let mut oid = self.follow_to_object_packed(store, packed)?;
+                let mut oid = ReferenceExt::follow_to_object_packed(self, store, packed)?;
                 let mut buf = Vec::new();
                 let peeled_id = loop {
                     let gix_object::Data {
@@ -193,7 +193,7 @@ impl ReferenceExt for Reference {
         store: &file::Store,
         packed: Option<&packed::Buffer>,
     ) -> Result<ObjectId, peel::to_object::Error> {
-        self.follow_to_object_packed(store, packed)
+        ReferenceExt::follow_to_object_packed(self, store, packed)
     }
 
     fn follow_to_object_packed(

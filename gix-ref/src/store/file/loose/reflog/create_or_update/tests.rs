@@ -33,7 +33,12 @@ fn reflog_lines(store: &file::Store, name: &str, buf: &mut Vec<u8>) -> Result<Ve
         .map_err(Into::into)
 }
 
-const WRITE_MODES: &[WriteReflog] = &[WriteReflog::Normal, WriteReflog::Disable, WriteReflog::Always];
+const WRITE_MODES: &[WriteReflog] = &[
+    WriteReflog::Normal,
+    WriteReflog::Existing,
+    WriteReflog::Disable,
+    WriteReflog::Always,
+];
 
 #[test]
 fn should_autocreate_is_unaffected_by_writemode() -> Result {
@@ -103,7 +108,7 @@ fn missing_reflog_creates_it_even_if_similarly_named_empty_dir_exists_and_append
                     }
                 );
             }
-            WriteReflog::Disable => {
+            WriteReflog::Existing | WriteReflog::Disable => {
                 assert!(
                     store.reflog_iter(full_name, &mut buf)?.is_none(),
                     "there is no logs in disabled mode"
@@ -140,7 +145,7 @@ fn missing_reflog_creates_it_even_if_similarly_named_empty_dir_exists_and_append
                     "the empty directory was replaced with the reflog file"
                 );
             }
-            WriteReflog::Disable => {
+            WriteReflog::Existing | WriteReflog::Disable => {
                 assert!(
                     store.reflog_iter(full_name_str, &mut buf)?.is_none(),
                     "reflog still doesn't exist"
@@ -153,6 +158,50 @@ fn missing_reflog_creates_it_even_if_similarly_named_empty_dir_exists_and_append
             }
         }
     }
+    Ok(())
+}
+
+#[test]
+fn existing_only_mode_updates_but_does_not_create_reflogs() -> Result {
+    let (_keep, mut store) = empty_store(WriteReflog::Always)?;
+    let name: &FullNameRef = "refs/heads/main".try_into()?;
+    let first = hex_to_id("28ce6a8b26aa170e1de65536fe8abe1832bd3242");
+    let second = hex_to_id("0000000000000000000000111111111111111111");
+    let committer = Signature {
+        name: "committer".into(),
+        email: "committer@example.com".into(),
+        time: gix_date::parse_header("1234 +0800").expect("valid fixture time"),
+    };
+    store.reflog_create_or_append(
+        name,
+        None,
+        &first,
+        Some(committer.to_ref(&mut TimeBuf::default())),
+        b"first".as_bstr(),
+        false,
+    )?;
+    store.write_reflog = WriteReflog::Existing;
+    store.reflog_create_or_append(
+        name,
+        Some(first),
+        &second,
+        Some(committer.to_ref(&mut TimeBuf::default())),
+        b"second".as_bstr(),
+        false,
+    )?;
+    let mut buf = Vec::new();
+    assert_eq!(reflog_lines(&store, "refs/heads/main", &mut buf)?.len(), 2);
+
+    let missing: &FullNameRef = "refs/heads/missing".try_into()?;
+    store.reflog_create_or_append(
+        missing,
+        None,
+        &first,
+        Some(committer.to_ref(&mut TimeBuf::default())),
+        b"missing".as_bstr(),
+        false,
+    )?;
+    assert!(store.reflog_iter(missing, &mut buf)?.is_none());
     Ok(())
 }
 

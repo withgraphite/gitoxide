@@ -1,8 +1,6 @@
 //!
 #![allow(clippy::empty_docs)]
 
-use gix_ref::file::ReferenceExt;
-
 use crate::{Blob, Commit, Id, Object, Reference, Tag, Tree};
 
 pub mod iter;
@@ -164,7 +162,7 @@ impl<'repo> Reference<'repo> {
     pub fn peel_to_kind(&mut self, kind: gix_object::Kind) -> Result<Object<'repo>, peel::to_kind::Error> {
         let packed = self.repo.refs.cached_packed_buffer().map_err(|err| {
             peel::to_kind::Error::FollowToObject(gix_ref::peel::to_object::Error::Follow(
-                file::find::existing::Error::Find(file::find::Error::PackedOpen(err)),
+                file::find::existing::Error::Find(file::find::Error::PackedOpen(err)).into(),
             ))
         })?;
         self.peel_to_kind_packed(kind, packed.as_ref().map(|p| &***p))
@@ -234,7 +232,7 @@ impl<'repo> Reference<'repo> {
     pub fn follow_to_object(&mut self) -> Result<Id<'repo>, follow::to_object::Error> {
         let packed = self.repo.refs.cached_packed_buffer().map_err(|err| {
             follow::to_object::Error::FollowToObject(gix_ref::peel::to_object::Error::Follow(
-                file::find::existing::Error::Find(file::find::Error::PackedOpen(err)),
+                file::find::existing::Error::Find(file::find::Error::PackedOpen(err)).into(),
             ))
         })?;
         self.follow_to_object_packed(packed.as_ref().map(|p| &***p))
@@ -269,7 +267,7 @@ impl<'repo> Reference<'repo> {
     /// assert_eq!(branch.name().as_bstr(), "refs/heads/main");
     /// # Ok(()) }
     /// ```
-    pub fn follow(&self) -> Option<Result<Reference<'repo>, gix_ref::file::find::existing::Error>> {
+    pub fn follow(&self) -> Option<Result<Reference<'repo>, gix_ref::store::find::existing::Error>> {
         self.inner.follow(&self.repo.refs).map(|res| {
             res.map(|r| Reference {
                 inner: r,

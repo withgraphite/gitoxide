@@ -109,7 +109,7 @@ pub mod create_or_update {
         ) -> Result<(), Error> {
             let (reflog_base, full_name) = self.reflog_base_and_relative_path(name);
             match self.write_reflog {
-                WriteReflog::Normal | WriteReflog::Always => {
+                WriteReflog::Normal | WriteReflog::Existing | WriteReflog::Always => {
                     if self.write_reflog == WriteReflog::Always {
                         force_create_reflog = true;
                     }
@@ -117,7 +117,9 @@ pub mod create_or_update {
                     options.append(true).read(false);
                     let log_path = reflog_base.join(&full_name);
 
-                    if force_create_reflog || self.should_autocreate_reflog(&full_name) {
+                    if force_create_reflog
+                        || (self.write_reflog == WriteReflog::Normal && self.should_autocreate_reflog(&full_name))
+                    {
                         let parent_dir = log_path.parent().expect("always with parent directory");
                         gix_tempfile::create_dir::all(parent_dir, Default::default()).map_err(|err| {
                             Error::CreateLeadingDirectories {
@@ -126,6 +128,9 @@ pub mod create_or_update {
                             }
                         })?;
                         options.create(true);
+                    }
+                    if self.write_reflog == WriteReflog::Existing && !force_create_reflog && !log_path.is_file() {
+                        return Ok(());
                     }
 
                     let file_for_appending = match options.open(&log_path) {

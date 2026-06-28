@@ -11,7 +11,6 @@ use gix_ref::file::transaction::prepare::Error;
 use gix_ref::transaction::LogChange;
 use gix_ref::{
     FullName, Reference, Target,
-    file::ReferenceExt,
     transaction::{Change, PreviousValue, RefEdit, RefLog},
 };
 

@@ -44,7 +44,7 @@ default = ["max"]
 ##
 ## When used in conjunction with `http-client-curl-rustls`, the `openssl` crates will still be compiled, but won't be used. To bypass this, disable
 ## default dependencies and specify the features yourself.
-max = ["hashes", "max-control", "fast", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-blocking-client", "http-client-curl-openssl"]
+max = ["hashes", "max-control", "fast", "reftable", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-blocking-client", "http-client-curl-openssl"]
 
 ## Like `max`, but only Rust is allowed.
 ##
@@ -62,7 +62,7 @@ max-control = ["tracing", "fast", "pretty-cli", "gitoxide-core-tools", "prodash-
 ## All the good stuff, with less fanciness for smaller binaries.
 ##
 ## As fast as possible, progress line rendering, all transports based on their most mature implementation (HTTP), all `ein` tools, CLI colors and local-time support, JSON output.
-lean = ["hashes", "fast", "tracing", "pretty-cli", "http-client-curl-openssl", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-tools", "gitoxide-core-blocking-client", "prodash-render-line"]
+lean = ["hashes", "fast", "reftable", "tracing", "pretty-cli", "http-client-curl-openssl", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-tools", "gitoxide-core-blocking-client", "prodash-render-line"]
 
 ## The smallest possible build, best suitable for small single-core machines.
 ##
@@ -97,6 +97,8 @@ hashes = ["sha1", "sha256"]
 sha1 = ["gix/sha1"]
 ## Enable support for the SHA-256 hash throughout the `gix` crate.
 sha256 = ["gix/sha256"]
+## Enable support for reading and writing reftable-backed repositories using vendored C.
+reftable = ["gix/reftable"]
 
 ## Makes the crate execute as fast as possible by supporting parallel computation of otherwise long-running functions.
 ## If disabled, the binary will be visibly smaller.

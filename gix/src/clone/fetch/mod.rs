@@ -52,6 +52,8 @@ pub enum Error {
     RefMap(#[from] crate::remote::ref_map::Error),
     #[error(transparent)]
     ReferenceName(#[from] gix_validate::reference::name::Error),
+    #[error(transparent)]
+    RefTransaction(#[from] gix_ref::store::transaction::Error),
 }
 
 /// Modification

@@ -240,7 +240,7 @@ where
 
 struct Negotiate<'a, 'b, 'c> {
     objects: &'a crate::OdbHandle,
-    refs: &'a gix_ref::file::Store,
+    refs: &'a gix_ref::Store,
     graph: &'a mut gix_negotiate::Graph<'b, 'c>,
     alternates: Vec<PathBuf>,
     ref_map: &'a gix_protocol::fetch::RefMap,
@@ -266,7 +266,7 @@ impl gix_protocol::fetch::Negotiate for Negotiate<'_, '_, '_> {
                                 .nth(1)
                                 .and_then(|git_dir| crate::open_opts(git_dir, open_options.clone()).ok())
                         })
-                        .map(|repo| (repo.refs, repo.objects)))
+                        .map(|repo| (repo.refs.clone(), repo.objects)))
                 }
             },
             self.negotiator.deref_mut(),

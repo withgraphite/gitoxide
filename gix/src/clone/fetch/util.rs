@@ -110,7 +110,8 @@ pub fn update_head(
             })?;
             repo.refs
                 .transaction()
-                .packed_refs(gix_ref::file::transaction::PackedRefs::DeletionsAndNonSymbolicUpdates(
+                .objects(&repo.objects)
+                .packed_refs(gix_ref::store::transaction::PackedRefs::DeletionsAndNonSymbolicUpdates(
                     Box::new(&repo.objects),
                 ))
                 .prepare(

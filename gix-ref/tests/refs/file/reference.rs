@@ -1,7 +1,5 @@
 mod reflog {
     mod packed {
-        use gix_ref::file::ReferenceExt;
-
         use crate::file;
 
         #[test]
@@ -48,7 +46,7 @@ mod reflog {
 
 mod peel {
     use gix_object::FindExt;
-    use gix_ref::{Reference, file::ReferenceExt};
+    use gix_ref::Reference;
 
     use crate::{
         file,

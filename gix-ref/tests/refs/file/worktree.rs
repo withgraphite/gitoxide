@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, path::PathBuf};
 
-use gix_ref::{Reference, file::ReferenceExt};
+use gix_ref::Reference;
 use gix_testtools::Creation;
 
 fn dir(packed: bool, writable: bool) -> crate::Result<(PathBuf, Option<gix_testtools::tempfile::TempDir>)> {
