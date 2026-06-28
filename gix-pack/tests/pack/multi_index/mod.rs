@@ -12,6 +12,7 @@ fn multi_index(object_hash: gix_hash::Kind) -> (File, PathBuf) {
 }
 
 mod access;
+mod chain;
 mod fuzzed;
 
 mod verify;

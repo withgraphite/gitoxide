@@ -210,13 +210,16 @@ where
     }
 }
 
-pub(crate) fn lookup_prefix<'a>(
+pub(crate) fn lookup_prefix<'a, F>(
     prefix: gix_hash::Prefix,
     candidates: Option<&mut Range<EntryIndex>>,
     fan: &[u32; FAN_LEN],
-    oid_at_index: &dyn Fn(EntryIndex) -> &'a gix_hash::oid,
+    oid_at_index: &F,
     num_objects: u32,
-) -> Option<PrefixLookupResult> {
+) -> Option<PrefixLookupResult>
+where
+    F: Fn(EntryIndex) -> &'a gix_hash::oid,
+{
     let first_byte = prefix.as_oid().first_byte() as usize;
     let mut upper_bound = fan[first_byte];
     let mut lower_bound = if first_byte != 0 { fan[first_byte - 1] } else { 0 };
@@ -273,11 +276,10 @@ pub(crate) fn lookup_prefix<'a>(
     None
 }
 
-pub(crate) fn lookup<'a>(
-    id: &gix_hash::oid,
-    fan: &[u32; FAN_LEN],
-    oid_at_index: &dyn Fn(EntryIndex) -> &'a gix_hash::oid,
-) -> Option<EntryIndex> {
+pub(crate) fn lookup<'a, F>(id: &gix_hash::oid, fan: &[u32; FAN_LEN], oid_at_index: &F) -> Option<EntryIndex>
+where
+    F: Fn(EntryIndex) -> &'a gix_hash::oid,
+{
     let first_byte = id.first_byte() as usize;
     let mut upper_bound = fan[first_byte];
     let mut lower_bound = if first_byte != 0 { fan[first_byte - 1] } else { 0 };

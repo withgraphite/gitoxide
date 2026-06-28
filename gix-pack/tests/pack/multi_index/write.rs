@@ -39,7 +39,7 @@ fn from_paths() -> crate::Result {
     let file = gix_pack::multi_index::File::at(output_path, None)?;
     assert_eq!(file.num_indices(), 3);
     assert_eq!(
-        file.index_names(),
+        file.index_names().cloned().collect::<Vec<_>>(),
         vec![
             PathBuf::from("pack-11fdfa9e156ab73caae3b6da867192221f2089c2.idx"),
             PathBuf::from("pack-a2bf8e71d8c18879e499335762dd95119d93d9f1.idx"),

@@ -6,7 +6,7 @@ use crate::{exact_vec, index, multi_index::File};
 
 ///
 pub mod integrity {
-    use crate::multi_index::EntryIndex;
+    use crate::multi_index::{EntryIndex, PackIndex};
 
     /// Returned by [`multi_index::File::verify_integrity()`][crate::multi_index::File::verify_integrity()].
     #[derive(thiserror::Error, Debug)]
@@ -30,12 +30,26 @@ pub mod integrity {
         OidNotFound { id: gix_hash::ObjectId },
         #[error("The object id at multi-index entry {index} wasn't in order")]
         OutOfOrder { index: EntryIndex },
+        #[error(
+            "Multi-index entry {index} refers to pack {pack_index}, but its layer contains only {num_indices} packs"
+        )]
+        PackIndexOutOfBounds {
+            index: EntryIndex,
+            pack_index: PackIndex,
+            num_indices: PackIndex,
+        },
+        #[error(
+            "Multi-index entry {index} refers to large offset {large_offset_index}, but its layer contains only {num_large_offsets} large offsets"
+        )]
+        LargeOffsetOutOfBounds {
+            index: EntryIndex,
+            large_offset_index: u32,
+            num_large_offsets: usize,
+        },
         #[error("The fan at index {index} is out of order as it's larger then the following value.")]
         Fan { index: usize },
         #[error("The multi-index claims to have no objects")]
         Empty,
-        #[error("The multi-index path '{path}' has no parent directory")]
-        InvalidPath { path: std::path::PathBuf },
         #[error("Interrupted")]
         Interrupted,
     }
@@ -79,21 +93,61 @@ impl<T> File<T>
 where
     T: crate::FileData,
 {
-    /// Validate that our [`checksum()`][File::checksum()] matches the actual contents
-    /// of this index file, and return it if it does.
+    /// Validate that the trailing checksum of each layer matches the actual contents
+    /// of its file, and return the [`checksum()`][File::checksum()] of the most recent layer if they all do.
     pub fn verify_checksum(
         &self,
         progress: &mut dyn Progress,
         should_interrupt: &AtomicBool,
     ) -> Result<gix_hash::ObjectId, checksum::Error> {
-        crate::verify::checksum_on_disk_or_mmap(
-            self.path(),
-            &self.data,
-            self.checksum(),
-            self.object_hash,
-            progress,
-            should_interrupt,
-        )
+        let mut checksum = None;
+        for layer in &self.layers {
+            checksum = Some(crate::verify::checksum_on_disk_or_mmap(
+                &layer.path,
+                &layer.data,
+                layer.checksum(self.hash_len),
+                self.object_hash,
+                progress,
+                should_interrupt,
+            )?);
+        }
+        Ok(checksum.expect("at least one layer"))
+    }
+
+    /// Validate fanout, object ordering, pack ids, and large-offset references without opening pack index files.
+    pub fn verify_structure(&self) -> Result<(), integrity::Error> {
+        self.verify_structure_with_entries(|_, _| {})
+    }
+
+    fn verify_structure_with_entries(
+        &self,
+        mut visit: impl FnMut(crate::multi_index::PackIndex, crate::multi_index::EntryIndex),
+    ) -> Result<(), integrity::Error> {
+        for layer in &self.layers {
+            if let Some(first_invalid) = crate::verify::fan(&layer.fan) {
+                return Err(integrity::Error::Fan { index: first_invalid });
+            }
+        }
+        if self.num_objects == 0 {
+            return Err(integrity::Error::Empty);
+        }
+
+        for layer in &self.layers {
+            for local_index in 0..layer.num_objects {
+                let entry_index = layer.objects_in_base + local_index;
+                if local_index + 1 != layer.num_objects {
+                    let lhs = self.oid_at_layer_index(layer, local_index);
+                    let rhs = self.oid_at_layer_index(layer, local_index + 1);
+                    if rhs.cmp(lhs) != Ordering::Greater {
+                        return Err(integrity::Error::OutOfOrder { index: entry_index });
+                    }
+                }
+                let (pack_id, _) =
+                    self.checked_pack_id_and_pack_offset_at_layer_index(layer, local_index, entry_index)?;
+                visit(pack_id, entry_index);
+            }
+        }
+        Ok(())
     }
 
     /// Similar to [`verify_integrity()`][File::verify_integrity()] but without any deep inspection of objects.
@@ -144,11 +198,7 @@ where
         C: crate::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,
     {
-        let parent = self.path.parent().ok_or_else(|| {
-            index::traverse::Error::Processor(integrity::Error::InvalidPath {
-                path: self.path.clone(),
-            })
-        })?;
+        let parent = self.pack_dir();
 
         let actual_index_checksum = self
             .verify_checksum(
@@ -160,16 +210,6 @@ where
             )
             .map_err(integrity::Error::from)
             .map_err(index::traverse::Error::Processor)?;
-
-        if let Some(first_invalid) = crate::verify::fan(&self.fan) {
-            return Err(index::traverse::Error::Processor(integrity::Error::Fan {
-                index: first_invalid,
-            }));
-        }
-
-        if self.num_objects == 0 {
-            return Err(index::traverse::Error::Processor(integrity::Error::Empty));
-        }
 
         let mut pack_traverse_statistics = Vec::new();
 
@@ -184,24 +224,11 @@ where
                 gix_features::progress::count("objects"),
             );
 
-            for entry_index in 0..(self.num_objects - 1) {
-                let lhs = self.oid_at_index(entry_index);
-                let rhs = self.oid_at_index(entry_index + 1);
-
-                if rhs.cmp(lhs) != Ordering::Greater {
-                    return Err(index::traverse::Error::Processor(integrity::Error::OutOfOrder {
-                        index: entry_index,
-                    }));
-                }
-                let (pack_id, _) = self.pack_id_and_pack_offset_at_index(entry_index);
+            self.verify_structure_with_entries(|pack_id, entry_index| {
                 pack_ids_and_offsets.push((pack_id, entry_index));
                 progress.inc();
-            }
-            {
-                let entry_index = self.num_objects - 1;
-                let (pack_id, _) = self.pack_id_and_pack_offset_at_index(entry_index);
-                pack_ids_and_offsets.push((pack_id, entry_index));
-            }
+            })
+            .map_err(index::traverse::Error::Processor)?;
             // sort by pack-id to allow handling all indices matching a pack while its open.
             pack_ids_and_offsets.sort_by_key(|l| l.0);
             progress.show_throughput(order_start);
@@ -214,7 +241,7 @@ where
 
         let mut pack_ids_slice = pack_ids_and_offsets.as_slice();
 
-        for (pack_id, index_file_name) in self.index_names.iter().enumerate() {
+        for (pack_id, index_file_name) in self.index_names().enumerate() {
             progress.set_name(index_file_name.display().to_string());
             progress.inc();
 
