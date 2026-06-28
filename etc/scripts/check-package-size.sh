@@ -39,6 +39,7 @@ echo 'in root: gitoxide CLI'
 (enter gix-hash && indent cargo diet -n --package-size-limit 30KB)
 (enter gix-chunk && indent cargo diet -n --package-size-limit 15KB)
 (enter gix-features && indent cargo diet -n --package-size-limit 65KB)
+(enter gix-reftable && indent cargo diet -n --package-size-limit 60KB)
 (enter gix-reftable-sys && indent cargo diet -n --package-size-limit 400KB)
 (enter gix-ref && indent cargo diet -n --package-size-limit 55KB)
 (enter gix-diff && indent cargo diet -n --package-size-limit 35KB)

@@ -2310,6 +2310,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-reftable"
+version = "0.1.0"
+dependencies = [
+ "bstr",
+ "gix-hash",
+ "gix-path",
+ "gix-reftable-sys",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "gix-reftable-sys"
 version = "0.1.0"
 dependencies = [

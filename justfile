@@ -176,6 +176,7 @@ unit-tests:
     cargo nextest run -p gix-hash --features sha1,sha256 --no-fail-fast
     cargo nextest run -p gix-hash --features sha256 --no-fail-fast
     cargo nextest run -p gix-reftable-sys --no-fail-fast
+    cargo nextest run -p gix-reftable --features sha1,sha256 --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-commitgraph --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-commitgraph --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-object --no-fail-fast
