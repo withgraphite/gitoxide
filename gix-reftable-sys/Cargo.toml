@@ -1,0 +1,62 @@
+lints.workspace = true
+
+[package]
+name = "gix-reftable-sys"
+version = "0.1.0"
+repository = "https://github.com/GitoxideLabs/gitoxide"
+license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
+description = "Raw bindings to Git's vendored C reftable implementation"
+authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
+edition = "2024"
+rust-version = "1.85"
+links = "gix_reftable"
+include = [
+    "/build.rs",
+    "/c/**/*",
+    "/include/**/*",
+    "/src/**/*",
+    "/tests/**/*",
+    "/vendor/reftable/**/*",
+    "/UPSTREAM-PROVENANCE.tsv",
+    "/CHANGELOG.md",
+    "/LOCAL-PATCHES.md",
+    "/LOCAL-PATCHES.patch",
+    "/README.md",
+    "/LICENSE-*",
+]
+
+[lib]
+doctest = false
+test = true
+
+[features]
+default = []
+## Use the Rust platform implementation backed by gitoxide filesystem primitives.
+rust-platform = [
+    "dep:bstr",
+    "dep:fastrand",
+    "dep:gix-lock",
+    "dep:gix-path",
+    "dep:gix-tempfile",
+    "dep:memmap2",
+    "dep:windows-sys",
+]
+
+[dependencies]
+bstr = { version = "1.12.0", optional = true }
+fastrand = { version = "2.3.0", optional = true }
+gix-lock = { version = "^23.0.1", path = "../gix-lock", optional = true }
+gix-path = { version = "^0.12.1", path = "../gix-path", optional = true }
+gix-tempfile = { version = "^23.0.1", path = "../gix-tempfile", default-features = false, optional = true }
+libz-sys = "1.1.28"
+memmap2 = { version = "0.9.10", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading"], optional = true }
+
+[build-dependencies]
+cc = "1.2.61"
+
+[dev-dependencies]
+gix-hash = { version = "^0.25.1", path = "../gix-hash", features = ["sha1"] }
+gix-object = { version = "^0.62.0", path = "../gix-object", features = ["sha1"] }

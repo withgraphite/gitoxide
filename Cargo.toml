@@ -233,6 +233,7 @@ members = [
     "gix-hash",
     "gix-validate",
     "gix-ref",
+    "gix-reftable-sys",
     "gix-command",
     "gix-config",
     "gix-config-value",

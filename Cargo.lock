@@ -2310,6 +2310,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-reftable-sys"
+version = "0.1.0"
+dependencies = [
+ "bstr",
+ "cc",
+ "fastrand",
+ "gix-hash",
+ "gix-lock",
+ "gix-object",
+ "gix-path",
+ "gix-tempfile",
+ "libz-sys",
+ "memmap2",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "gix-revision"
 version = "0.47.0"
 dependencies = [
