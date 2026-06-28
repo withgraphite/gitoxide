@@ -53,6 +53,7 @@ pub mod index_names {
     pub fn from_bytes(
         mut chunk: &[u8],
         num_packs: u32,
+        require_lexicographic_order: bool,
         alloc_limit_bytes: Option<usize>,
     ) -> Result<Vec<PathBuf>, decode::Error> {
         let mut out = Vec::new();
@@ -78,7 +79,7 @@ pub mod index_names {
                 })?
                 .to_owned();
 
-            if let Some(previous) = out.last() {
+            if let Some(previous) = out.last().filter(|_| require_lexicographic_order) {
                 if previous >= &path {
                     return Err(decode::Error::NotOrderedAlphabetically);
                 }
@@ -255,6 +256,21 @@ pub mod offsets {
     pub fn is_valid(offset: &Range<usize>, num_objects: u32) -> bool {
         let entry_size = 4 /* pack-id */ + 4 /* pack-offset */;
         (offset.end - offset.start) == (num_objects as usize).saturating_mul(entry_size)
+    }
+}
+
+/// Information about the chunk with the checksum of the base layer of an incremental multi-pack index.
+pub mod base {
+    use std::ops::Range;
+
+    /// The id uniquely identifying the chunk with the base layer checksum.
+    ///
+    /// Note that git currently never writes this chunk - its id is merely reserved.
+    pub const ID: gix_chunk::Id = *b"BASE";
+
+    /// Returns true if the size of the `offset` range matches a single hash of the given kind.
+    pub fn is_valid(offset: &Range<usize>, hash: gix_hash::Kind) -> bool {
+        (offset.end - offset.start) == hash.len_in_bytes()
     }
 }
 

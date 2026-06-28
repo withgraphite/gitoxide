@@ -25,14 +25,14 @@ fn lookup_with_ambiguity() {
         "error code indicates ambiguous result"
     );
 
-    let mut candidates = 0..0;
+    let mut candidates = Vec::new();
     assert_eq!(
         file.lookup_prefix(prefix, Some(&mut candidates)),
         Some(Err(())),
         "error code is similar to before"
     );
     assert!(
-        candidates.len() > 1,
+        candidates.iter().map(ExactSizeIterator::len).sum::<usize>() > 1,
         "we receive a list of all duplicates, got {candidates:?}"
     );
 }
@@ -57,7 +57,7 @@ fn lookup_prefix() {
     let (file, _path) = multi_index(object_hash());
 
     for (idx, entry) in file.iter().enumerate() {
-        for mut candidates in [None, Some(0..0)] {
+        for mut candidates in [None, Some(Vec::new())] {
             let hex_len = (idx % file.object_hash().len_in_hex()).max(5);
             let hex_oid = entry.oid.to_hex_with_len(hex_len).to_string();
             assert_eq!(hex_oid.len(), hex_len);
@@ -69,7 +69,7 @@ fn lookup_prefix() {
             assert_eq!(file.oid_at_index(entry_index), entry.oid);
 
             if let Some(candidates) = candidates {
-                assert_eq!(candidates, entry_index..entry_index + 1);
+                assert_eq!(candidates, vec![entry_index..entry_index + 1]);
             }
         }
     }
@@ -82,9 +82,10 @@ fn lookup_missing() {
     let prefix = gix_hash::Prefix::new(&object_hash.null(), 7).unwrap();
     assert!(file.lookup_prefix(prefix, None).is_none());
 
-    let mut candidates = 1..1;
+    #[allow(clippy::single_range_in_vec_init)]
+    let mut candidates = vec![1..1];
     assert!(file.lookup_prefix(prefix, Some(&mut candidates)).is_none());
-    assert_eq!(candidates, 0..0);
+    assert_eq!(candidates, Vec::<std::ops::Range<u32>>::new());
 }
 
 #[test]
@@ -107,7 +108,7 @@ fn general() {
     );
     // assert_eq!()
     assert_eq!(
-        file.index_names(),
+        file.index_names().cloned().collect::<Vec<_>>(),
         vec![PathBuf::from(match object_hash {
             gix_hash::Kind::Sha1 => "pack-542ad1d1c7c762ea4e36907570ff9e4b5b7dde1b.idx",
             gix_hash::Kind::Sha256 => "pack-5ab807ed981e6b793138dfa390c93989c532146948ee820bfd5a4351be090b35.idx",
