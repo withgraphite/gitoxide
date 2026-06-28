@@ -1,0 +1,36 @@
+lints.workspace = true
+
+[package]
+name = "gix-reftable"
+version = "0.1.0"
+repository = "https://github.com/GitoxideLabs/gitoxide"
+license = "MIT OR Apache-2.0"
+description = "Safe gitoxide types for Git's reftable implementation"
+authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
+edition = "2024"
+rust-version = "1.85"
+include = ["/src/**/*", "/tests/**/*", "/CHANGELOG.md", "/README.md", "/LICENSE-*"]
+
+[lib]
+doctest = false
+test = true
+
+[features]
+default = []
+## Enable SHA-1 object IDs.
+sha1 = ["gix-hash/sha1"]
+## Enable SHA-256 object IDs.
+sha256 = ["gix-hash/sha256"]
+
+[dependencies]
+bstr = "1.12.0"
+gix-hash = { version = "^0.25.1", path = "../gix-hash", default-features = false }
+gix-path = { version = "^0.12.1", path = "../gix-path" }
+gix-reftable-sys = { version = "^0.1.0", path = "../gix-reftable-sys" }
+thiserror = "2.0.18"
+
+[dev-dependencies]
+tempfile = "3.26.0"
+
+[package.metadata.docs.rs]
+features = ["sha1", "sha256"]
