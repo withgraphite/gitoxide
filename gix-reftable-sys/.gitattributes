@@ -1,0 +1,3 @@
+vendor/reftable/** linguist-vendored=true
+src/bindings.rs linguist-generated=true
+LOCAL-PATCHES.patch -whitespace

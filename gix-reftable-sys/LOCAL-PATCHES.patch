@@ -1,0 +1,401 @@
+diff --git a/vendor/reftable/basics.c b/vendor/reftable/basics.c
+index e969927b615f..1b4604984421 100644
+--- a/vendor/reftable/basics.c
++++ b/vendor/reftable/basics.c
+@@ -151,6 +151,8 @@
+ {
+ 	size_t lo = 0;
+ 	size_t hi = sz;
++	if (!sz)
++		return 0;
+ 
+ 	/* Invariants:
+ 	 *
+@@ -195,7 +197,7 @@
+ 	return p - names;
+ }
+ 
+-int parse_names(char *buf, int size, char ***out)
++int parse_names(char *buf, size_t size, char ***out)
+ {
+ 	char **names = NULL;
+ 	size_t names_cap = 0;
+diff --git a/vendor/reftable/basics.h b/vendor/reftable/basics.h
+index e4b83b2b03ff..4e7d1998690a 100644
+--- a/vendor/reftable/basics.h
++++ b/vendor/reftable/basics.h
+@@ -171,7 +171,7 @@
+  *
+  * Returns 0 on success, a reftable error code on error.
+  */
+-int parse_names(char *buf, int size, char ***out);
++int parse_names(char *buf, size_t size, char ***out);
+ 
+ /* compares two NULL-terminated arrays of strings. */
+ int names_equal(const char **a, const char **b);
+diff --git a/vendor/reftable/block.c b/vendor/reftable/block.c
+index 920b3f448674..15a125abe12e 100644
+--- a/vendor/reftable/block.c
++++ b/vendor/reftable/block.c
+@@ -226,7 +226,7 @@
+ 
+ int reftable_block_init(struct reftable_block *block,
+ 			struct reftable_block_source *source,
+-			uint32_t offset, uint32_t header_size,
++			uint64_t offset, uint32_t header_size,
+ 			uint32_t table_block_size, uint32_t hash_size,
+ 			uint8_t want_type)
+ {
+@@ -242,6 +242,10 @@
+ 	err = read_block(source, &block->block_data, offset, guess_block_size);
+ 	if (err < 0)
+ 		goto done;
++	if (block->block_data.len < header_size + 4) {
++		err = REFTABLE_FORMAT_ERROR;
++		goto done;
++	}
+ 
+ 	block_type = block->block_data.data[header_size];
+ 	if (!reftable_is_block_type(block_type)) {
+@@ -254,6 +258,10 @@
+ 	}
+ 
+ 	block_size = reftable_get_be24(block->block_data.data + header_size + 1);
++	if (block_size < header_size + 6) {
++		err = REFTABLE_FORMAT_ERROR;
++		goto done;
++	}
+ 	if (block_size > guess_block_size) {
+ 		err = read_block(source, &block->block_data, offset, block_size);
+ 		if (err < 0)
+@@ -262,6 +270,10 @@
+ 
+ 	if (block_type == REFTABLE_BLOCK_TYPE_LOG) {
+ 		uint32_t block_header_skip = 4 + header_size;
++		if (block->block_data.len < block_header_skip) {
++			err = REFTABLE_FORMAT_ERROR;
++			goto done;
++		}
+ 		uLong dst_len = block_size - block_header_skip;
+ 		uLong src_len = block->block_data.len - block_header_skip;
+ 
+@@ -330,9 +342,31 @@
+ 		   unaligned. */
+ 		full_block_size = block_size;
+ 	}
++	if (block->block_data.len < block_size) {
++		err = REFTABLE_FORMAT_ERROR;
++		goto done;
++	}
+ 
+ 	restart_count = reftable_get_be16(block->block_data.data + block_size - 2);
++	if (3 * (uint32_t)restart_count > block_size - 2) {
++		err = REFTABLE_FORMAT_ERROR;
++		goto done;
++	}
+ 	restart_off = block_size - 2 - 3 * restart_count;
++	if (!restart_count || restart_off < header_size + 4) {
++		err = REFTABLE_FORMAT_ERROR;
++		goto done;
++	}
++	for (uint32_t i = 0, previous = 0; i < restart_count; i++) {
++		uint32_t restart = reftable_get_be24(block->block_data.data +
++						     restart_off + 3 * i);
++		if (restart < header_size + 4 || restart >= restart_off ||
++		    (i && restart <= previous)) {
++			err = REFTABLE_FORMAT_ERROR;
++			goto done;
++		}
++		previous = restart;
++	}
+ 
+ 	block->block_type = block_type;
+ 	block->hash_size = hash_size;
+@@ -351,7 +385,8 @@
+ 
+ void reftable_block_release(struct reftable_block *block)
+ {
+-	inflateEnd(block->zstream);
++	if (block->zstream)
++		inflateEnd(block->zstream);
+ 	reftable_free(block->zstream);
+ 	reftable_free(block->uncompressed_data);
+ 	block_source_release_data(&block->block_data);
+@@ -645,7 +680,8 @@
+ 
+ void block_writer_release(struct block_writer *bw)
+ {
+-	deflateEnd(bw->zstream);
++	if (bw->zstream)
++		deflateEnd(bw->zstream);
+ 	REFTABLE_FREE_AND_NULL(bw->zstream);
+ 	REFTABLE_FREE_AND_NULL(bw->restarts);
+ 	REFTABLE_FREE_AND_NULL(bw->compressed);
+diff --git a/vendor/reftable/record.c b/vendor/reftable/record.c
+index fcd387ba5d57..87358eb1e5be 100644
+--- a/vendor/reftable/record.c
++++ b/vendor/reftable/record.c
+@@ -302,7 +302,7 @@
+ 	case REFTABLE_REF_DELETION:
+ 		break;
+ 	default:
+-		abort();
++		break;
+ 	}
+ 
+ 	reftable_free(ref->refname);
+@@ -367,6 +367,9 @@
+ 	const char *refname = NULL;
+ 	size_t refname_cap = 0;
+ 	int n, err;
++
++	if (val_type >= REFTABLE_NR_REF_VALUETYPES)
++		return REFTABLE_FORMAT_ERROR;
+ 
+ 	n = get_var_int(&update_index, &in);
+ 	if (n < 0)
+@@ -426,8 +429,8 @@
+ 	case REFTABLE_REF_DELETION:
+ 		break;
+ 	default:
+-		abort();
+-		break;
++		err = REFTABLE_FORMAT_ERROR;
++		goto done;
+ 	}
+ 
+ 	return start.len - in.len;
+@@ -645,7 +648,7 @@
+ 	int cmp;
+ 
+ 	cmp = memcmp(a->hash_prefix, b->hash_prefix,
+-		     a->hash_prefix_len > b->hash_prefix_len ?
++		     a->hash_prefix_len < b->hash_prefix_len ?
+ 		     a->hash_prefix_len : b->hash_prefix_len);
+ 	if (cmp)
+ 		return cmp;
+@@ -654,7 +657,11 @@
+ 	 * When the prefix is the same then the object record that is longer is
+ 	 * considered to be bigger.
+ 	 */
+-	return a->hash_prefix_len - b->hash_prefix_len;
++	if (a->hash_prefix_len < b->hash_prefix_len)
++		return -1;
++	if (a->hash_prefix_len > b->hash_prefix_len)
++		return 1;
++	return 0;
+ }
+ 
+ static struct reftable_record_vtable reftable_obj_record_vtable = {
+@@ -832,6 +839,8 @@
+ 	int err, n;
+ 
+ 	if (key.len <= 9 || key.buf[key.len - 9] != 0)
++		return REFTABLE_FORMAT_ERROR;
++	if (val_type > REFTABLE_LOG_UPDATE)
+ 		return REFTABLE_FORMAT_ERROR;
+ 
+ 	REFTABLE_ALLOC_GROW_OR_NULL(r->refname, key.len - 8, r->refname_cap);
+@@ -991,7 +1000,11 @@
+ 	 * update index is reversed when comparing keys. For reference, see how
+ 	 * we handle this in reftable_log_record_key()`.
+ 	 */
+-	return b->update_index - a->update_index;
++	if (b->update_index < a->update_index)
++		return -1;
++	if (b->update_index > a->update_index)
++		return 1;
++	return 0;
+ }
+ 
+ int reftable_log_record_equal(const struct reftable_log_record *a,
+diff --git a/vendor/reftable/reftable-block.h b/vendor/reftable/reftable-block.h
+index 94c79b5c58fb..f6d6257c5bc3 100644
+--- a/vendor/reftable/reftable-block.h
++++ b/vendor/reftable/reftable-block.h
+@@ -54,7 +54,7 @@
+ /* Initialize a reftable block from the given block source. */
+ int reftable_block_init(struct reftable_block *b,
+ 			struct reftable_block_source *source,
+-			uint32_t offset, uint32_t header_size,
++			uint64_t offset, uint32_t header_size,
+ 			uint32_t table_block_size, uint32_t hash_size,
+ 			uint8_t want_type);
+ 
+diff --git a/vendor/reftable/reftable-writer.h b/vendor/reftable/reftable-writer.h
+index a66db415c876..9106bc10028c 100644
+--- a/vendor/reftable/reftable-writer.h
++++ b/vendor/reftable/reftable-writer.h
+@@ -17,13 +17,13 @@
+ /* reftable_write_options sets options for writing a single reftable. */
+ struct reftable_write_options {
+ 	/* boolean: do not pad out blocks to block size. */
+-	unsigned unpadded : 1;
++	uint8_t unpadded;
+ 
+ 	/* the blocksize. Should be less than 2^24. */
+ 	uint32_t block_size;
+ 
+ 	/* boolean: do not generate a SHA1 => ref index. */
+-	unsigned skip_index_objects : 1;
++	uint8_t skip_index_objects;
+ 
+ 	/* how often to write complete keys in each block. */
+ 	uint16_t restart_interval;
+@@ -39,10 +39,10 @@
+ 	/* boolean: copy log messages exactly. If unset, check that the message
+ 	 *   is a single line, and add '\n' if missing.
+ 	 */
+-	unsigned exact_log_message : 1;
++	uint8_t exact_log_message;
+ 
+ 	/* boolean: Prevent auto-compaction of tables. */
+-	unsigned disable_auto_compact : 1;
++	uint8_t disable_auto_compact;
+ 
+ 	/*
+ 	 * Geometric sequence factor used by auto-compaction to decide which
+diff --git a/vendor/reftable/stack.c b/vendor/reftable/stack.c
+index 1fba96ddb336..ee789af589df 100644
+--- a/vendor/reftable/stack.c
++++ b/vendor/reftable/stack.c
+@@ -21,6 +21,9 @@
+ 			  const char *name)
+ {
+ 	int err;
++	if (!name || !*name || strchr(name, '/') || strchr(name, '\\') ||
++	    !strcmp(name, ".") || !strcmp(name, ".."))
++		return REFTABLE_FORMAT_ERROR;
+ 	reftable_buf_reset(dest);
+ 	if ((err = reftable_buf_addstr(dest, st->reftable_dir)) < 0 ||
+ 	    (err = reftable_buf_addstr(dest, "/")) < 0 ||
+@@ -70,12 +73,18 @@
+ 	char *buf = NULL;
+ 	int err = 0;
+ 	off_t size;
++	size_t usize;
+ 
+ 	size = lseek(fd, 0, SEEK_END);
+ 	if (size < 0) {
+ 		err = REFTABLE_IO_ERROR;
+ 		goto done;
+ 	}
++	if ((uintmax_t)size > SIZE_MAX - 1) {
++		err = REFTABLE_OUT_OF_MEMORY_ERROR;
++		goto done;
++	}
++	usize = (size_t)size;
+ 
+ 	err = lseek(fd, 0, SEEK_SET);
+ 	if (err < 0) {
+@@ -83,7 +92,7 @@
+ 		goto done;
+ 	}
+ 
+-	REFTABLE_ALLOC_ARRAY(buf, size + 1);
++	REFTABLE_ALLOC_ARRAY(buf, usize + 1);
+ 	if (!buf) {
+ 		err = REFTABLE_OUT_OF_MEMORY_ERROR;
+ 		goto done;
+@@ -100,9 +109,9 @@
+ 
+ 		total_read += bytes_read;
+ 	}
+-	buf[size] = 0;
+-
+-	err = parse_names(buf, size, namesp);
++	buf[usize] = 0;
++
++	err = parse_names(buf, usize, namesp);
+ done:
+ 	reftable_free(buf);
+ 	return err;
+@@ -958,9 +967,10 @@
+ uint64_t reftable_stack_next_update_index(struct reftable_stack *st)
+ {
+ 	int sz = st->merged->tables_len;
+-	if (sz > 0)
+-		return reftable_table_max_update_index(st->tables[sz - 1]) +
+-		       1;
++	if (sz > 0) {
++		uint64_t max = reftable_table_max_update_index(st->tables[sz - 1]);
++		return max == UINT64_MAX ? UINT64_MAX : max + 1;
++	}
+ 	return 1;
+ }
+ 
+diff --git a/vendor/reftable/table.c b/vendor/reftable/table.c
+index 56362df0eda5..bd1f3106c531 100644
+--- a/vendor/reftable/table.c
++++ b/vendor/reftable/table.c
+@@ -559,6 +559,10 @@
+ 		err = REFTABLE_FORMAT_ERROR;
+ 		goto done;
+ 	}
++	if (file_size < header_size(t->version) + 1 + footer_size(t->version)) {
++		err = REFTABLE_FORMAT_ERROR;
++		goto done;
++	}
+ 
+ 	t->size = file_size - footer_size(t->version);
+ 	t->source = *source;
+diff --git a/vendor/reftable/writer.c b/vendor/reftable/writer.c
+index 0133b649759b..0eb636dc9755 100644
+--- a/vendor/reftable/writer.c
++++ b/vendor/reftable/writer.c
+@@ -159,8 +159,10 @@
+ 	if (_opts)
+ 		opts = *_opts;
+ 	options_set_defaults(&opts);
+-	if (opts.block_size >= (1 << 24))
++	if (opts.block_size < 32 || opts.block_size >= (1 << 24)) {
++		reftable_free(wp);
+ 		return REFTABLE_API_ERROR;
++	}
+ 
+ 	reftable_buf_init(&wp->block_writer_data.last_key);
+ 	reftable_buf_init(&wp->last_key);
+@@ -174,7 +176,13 @@
+ 	wp->write_arg = writer_arg;
+ 	wp->opts = opts;
+ 	wp->flush = flush_func;
+-	writer_reinit_block_writer(wp, REFTABLE_BLOCK_TYPE_REF);
++	{
++		int err = writer_reinit_block_writer(wp, REFTABLE_BLOCK_TYPE_REF);
++		if (err < 0) {
++			reftable_writer_free(wp);
++			return err;
++		}
++	}
+ 
+ 	*out = wp;
+ 
+@@ -193,6 +201,8 @@
+ 	  * Returns REFTABLE_API_ERROR if called after writing has begun.
+ 	 */
+ 	if (w->next || w->last_key.len)
++		return REFTABLE_API_ERROR;
++	if (min > max || max == UINT64_MAX)
+ 		return REFTABLE_API_ERROR;
+ 
+ 	w->min_update_index = min;
+@@ -766,15 +776,15 @@
+ 	reftable_put_be32(p, crc32(0, footer, p - footer));
+ 	p += 4;
+ 
++	err = padded_write(w, footer, footer_size(writer_version(w)), 0);
++	if (err < 0)
++		goto done;
++
+ 	err = w->flush(w->write_arg);
+ 	if (err < 0) {
+ 		err = REFTABLE_IO_ERROR;
+ 		goto done;
+ 	}
+-
+-	err = padded_write(w, footer, footer_size(writer_version(w)), 0);
+-	if (err < 0)
+-		goto done;
+ 
+ 	if (empty_table) {
+ 		err = REFTABLE_EMPTY_TABLE_ERROR;

@@ -1,0 +1,42 @@
+# upstream-repo: https://github.com/git/git
+# upstream-commit: 014c454799dbf281e634823c6134e8e95978df6f
+# columns: path<TAB>upstream-blob<TAB>cat-file
+vendor/reftable/basics.c	e969927b615fc193ef3368acc922fcb414bfdc04	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/basics.c
+vendor/reftable/basics.h	e4b83b2b03ff8a8d5e9c34d97c1a6c5b39f7a8ed	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/basics.h
+vendor/reftable/block.c	920b3f448674f1c54dd3335f185e5c7f861394b6	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/block.c
+vendor/reftable/block.h	d6dfaae33e387b1b63b85c10e6625da9502c45de	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/block.h
+vendor/reftable/blocksource.c	7f7441f751342ac254871edd7b68f5cc2afa9935	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/blocksource.c
+vendor/reftable/blocksource.h	a110e059580217ce44c7c78727cd2c2d1c992c39	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/blocksource.h
+vendor/reftable/constants.h	e3b1aaa516423c926328c0ea0c117117e350778d	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/constants.h
+vendor/reftable/error.c	c7cab2dbc428340bb456615d435bc3b500a470cd	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/error.c
+vendor/reftable/fsck.c	8e73fc83f225e55acfa96089e6688112974c730e	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/fsck.c
+vendor/reftable/iter.c	2ecc52b3366efcddf7e1be678abd38013ecc2cea	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/iter.c
+vendor/reftable/iter.h	cc920970a577582574ee24bc6aa2a8c28c92d048	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/iter.h
+vendor/reftable/LICENSE	402e0f9356bae6172b03d55723c645e96b8e6e9f	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/LICENSE
+vendor/reftable/merged.c	733de07454d210dfda207ebbeec6920bb6b40fa8	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/merged.c
+vendor/reftable/merged.h	4317e5f5f6746eec06708056bff2e1ae1f63b6cb	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/merged.h
+vendor/reftable/pq.c	9a79f5c5eec986b9ae0babb3e05684c1d1a3f281	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/pq.c
+vendor/reftable/pq.h	42310670b09f6d9ced838f3738eb1e09e26e1e97	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/pq.h
+vendor/reftable/record.c	fcd387ba5d57a3c912dc88a85c719a5195d8b41e	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/record.c
+vendor/reftable/record.h	7953f352a3ccb36945931fd1f736c62dfc689fcc	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/record.h
+vendor/reftable/reftable-basics.h	dc8622682d7d06576ba7d244109b0ad2d3581f40	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/reftable-basics.h
+vendor/reftable/reftable-block.h	94c79b5c58fb765c903c16cbec2410894fff81ba	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/reftable-block.h
+vendor/reftable/reftable-blocksource.h	40c1e94646292130a5adba923aac2d30dd0f5477	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/reftable-blocksource.h
+vendor/reftable/reftable-constants.h	4ae9ba4bacc2d54753ada08877f95e33bf9383d9	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/reftable-constants.h
+vendor/reftable/reftable-error.h	0535e1478bda2df21ea8dc59f23429d4cc389ba3	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/reftable-error.h
+vendor/reftable/reftable-fsck.h	340fc7762ed76ffea90762e2dd8b44ad778e8f71	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/reftable-fsck.h
+vendor/reftable/reftable-iterator.h	a050cc153be711e3c6fea4ca48e6079d2bab55ed	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/reftable-iterator.h
+vendor/reftable/reftable-merged.h	02a9966835eb151fb9178dcb9ea8604441ab0122	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/reftable-merged.h
+vendor/reftable/reftable-record.h	e18c5382381c4bc355eb5c273f680e508c829a98	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/reftable-record.h
+vendor/reftable/reftable-stack.h	5f7be573fabf8e1765c22b89711542ccf39ca9ba	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/reftable-stack.h
+vendor/reftable/reftable-table.h	d7666b53a1ee0c262e21523ef477c859127b9894	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/reftable-table.h
+vendor/reftable/reftable-writer.h	a66db415c87637c3bf25004c919835f76074f93d	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/reftable-writer.h
+vendor/reftable/stack.c	1fba96ddb3366f95fab16943768864de27b347a6	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/stack.c
+vendor/reftable/stack.h	bc28f2998ac02737d9e17284a97e686038aa7d9c	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/stack.h
+vendor/reftable/system.h	628232a46f31f66d07e2c28db6b564865ff79d37	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/system.h
+vendor/reftable/table.c	56362df0eda5a6b63fbbac5395c97ce05b822596	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/table.c
+vendor/reftable/table.h	c54703e621061e98a7d10443391c9c4d88691ffe	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/table.h
+vendor/reftable/tree.c	a52f7c0c7d43963a587aae55ea096e00f76eddf2	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/tree.c
+vendor/reftable/tree.h	2c9c4652994633b261cac680f5d1c2d5c613fb1c	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/tree.h
+vendor/reftable/writer.c	0133b649759bcfba8f0e4e89740704da39b78d32	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/writer.c
+vendor/reftable/writer.h	9f53610b27a161d3ff02b8a6aa63ef0d92df5ada	git cat-file -p 014c454799dbf281e634823c6134e8e95978df6f:reftable/writer.h
