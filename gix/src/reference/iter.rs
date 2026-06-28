@@ -2,26 +2,25 @@
 #![allow(clippy::empty_docs)]
 
 use gix_path::RelativePath;
-use gix_ref::file::ReferenceExt;
 
 /// A platform to create iterators over references.
 #[must_use = "Iterators should be obtained from this iterator platform"]
 pub struct Platform<'r> {
-    pub(crate) platform: gix_ref::file::iter::Platform<'r>,
+    pub(crate) platform: gix_ref::store::iter::Platform<'r>,
     /// The owning repository.
     pub repo: &'r crate::Repository,
 }
 
 /// An iterator over references, with or without filter.
 pub struct Iter<'packed, 'repo> {
-    inner: gix_ref::file::iter::LooseThenPacked<'packed, 'repo>,
+    inner: gix_ref::store::iter::Iter<'packed>,
     peel_with_packed: Option<gix_ref::file::packed::SharedBufferSnapshot>,
     peel: bool,
     repo: &'repo crate::Repository,
 }
 
 impl<'packed, 'repo> Iter<'packed, 'repo> {
-    fn new(repo: &'repo crate::Repository, platform: gix_ref::file::iter::LooseThenPacked<'packed, 'repo>) -> Self {
+    fn new(repo: &'repo crate::Repository, platform: gix_ref::store::iter::Iter<'packed>) -> Self {
         Iter {
             inner: platform,
             peel_with_packed: None,
@@ -134,8 +133,10 @@ pub mod init {
         Io(#[from] std::io::Error),
         #[error(transparent)]
         RelativePath(#[from] gix_path::relative_path::Error),
+        #[error(transparent)]
+        Iter(#[from] gix_ref::store::iter::Error),
     }
 }
 
 /// The error returned by [references()][crate::Repository::references()].
-pub type Error = gix_ref::packed::buffer::open::Error;
+pub type Error = gix_ref::store::iter::Error;

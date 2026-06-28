@@ -223,17 +223,30 @@ impl ThreadSafeRepository {
         let mut refs = {
             let reflog = repo_config.reflog.unwrap_or(gix_ref::store::WriteReflog::Disable);
             let object_hash = repo_config.object_hash;
+            let storage = match repo_config.ref_storage {
+                config::RefStorage::Files => gix_ref::store::init::Storage::Files,
+                #[cfg(feature = "reftable")]
+                config::RefStorage::Reftable => gix_ref::store::init::Storage::Reftable,
+                #[cfg(not(feature = "reftable"))]
+                config::RefStorage::Reftable => {
+                    return Err(std::io::Error::other("reftable support is disabled").into());
+                }
+            };
             let ref_store_init_opts = gix_ref::store::init::Options {
                 write_reflog: reflog,
                 object_hash,
                 precompose_unicode: repo_config.precompose_unicode,
                 prohibit_windows_device_names: repo_config.protect_windows,
+                storage,
+                #[cfg(feature = "reftable")]
+                reftable: repo_config.reftable_options,
+                ..Default::default()
             };
             match &common_dir {
                 Some(common_dir) => {
-                    crate::RefStore::for_linked_worktree(git_dir.to_owned(), common_dir.into(), ref_store_init_opts)
+                    crate::RefStore::for_linked_worktree(git_dir.to_owned(), common_dir.into(), ref_store_init_opts)?
                 }
-                None => crate::RefStore::at(git_dir.to_owned(), ref_store_init_opts),
+                None => crate::RefStore::at(git_dir.to_owned(), ref_store_init_opts)?,
             }
         };
         let head = refs.find("HEAD").ok();
@@ -427,8 +440,14 @@ impl ThreadSafeRepository {
             config.resolved = resolved.into();
         }
 
-        refs.write_reflog = config::cache::util::reflog_or_default(config.reflog, worktree_dir.is_some());
-        refs.namespace.clone_from(&config.refs_namespace);
+        refs.set_write_reflog(config::cache::util::reflog_or_default(
+            config.reflog,
+            worktree_dir.is_some(),
+        ));
+        refs.take_namespace();
+        if let Some(namespace) = config.refs_namespace.clone() {
+            refs.set_namespace(namespace);
+        }
         let prefix = replacement_objects_refs_prefix(&config.resolved, lenient_config, filter_config_section)?;
 
         if *git_dir_trust == gix_sec::Trust::Reduced && config.alloc_limit_bytes.is_none() {

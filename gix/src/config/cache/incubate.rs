@@ -15,6 +15,9 @@ pub(crate) struct StageOne {
     pub is_bare: Option<bool>,
     pub lossy: bool,
     pub object_hash: gix_hash::Kind,
+    pub ref_storage: crate::config::RefStorage,
+    #[cfg(feature = "reftable")]
+    pub reftable_options: gix_ref::store::reftable::WriteOptions,
     pub reflog: Option<gix_ref::store::WriteReflog>,
     pub precompose_unicode: bool,
     pub protect_windows: bool,
@@ -51,6 +54,21 @@ impl StageOne {
             (0, Some(_)) => return Err(Error::ObjectFormatRequiresV1),
             (0 | 1, None) => legacy_object_hash()?,
             (version, _) => return Err(Error::UnsupportedRepositoryFormatVersion { version }),
+        };
+        let ref_storage = (repo_format_version == 1)
+            .then(|| {
+                config
+                    .string(Extensions::REF_STORAGE)
+                    .map(|format| Extensions::REF_STORAGE.try_into_ref_storage(format))
+            })
+            .flatten()
+            .transpose()?
+            .unwrap_or(crate::config::RefStorage::Files);
+        #[cfg(feature = "reftable")]
+        let reftable_options = if ref_storage == crate::config::RefStorage::Reftable {
+            reftable_options(&config)?
+        } else {
+            gix_ref::store::reftable::WriteOptions::default()
         };
 
         let extension_worktree = util::config_bool(
@@ -95,6 +113,9 @@ impl StageOne {
             is_bare,
             lossy,
             object_hash,
+            ref_storage,
+            #[cfg(feature = "reftable")]
+            reftable_options,
             reflog,
             precompose_unicode,
             protect_windows,
@@ -116,6 +137,60 @@ fn legacy_object_hash() -> Result<gix_hash::Kind, Error> {
     {
         Err(Error::UnsupportedObjectFormat { name: "sha1".into() })
     }
+}
+
+#[cfg(feature = "reftable")]
+fn reftable_options(config: &gix_config::File<'_>) -> Result<gix_ref::store::reftable::WriteOptions, Error> {
+    fn integer(config: &gix_config::File<'_>, key: &'static str) -> Result<Option<i64>, Error> {
+        config
+            .integer(key)
+            .transpose()
+            .map_err(|source| Error::ReftableValue { key, source })
+    }
+
+    fn boolean(config: &gix_config::File<'_>, key: &'static str) -> Result<Option<bool>, Error> {
+        config
+            .boolean(key)
+            .transpose()
+            .map_err(|source| Error::ReftableValue { key, source })
+    }
+
+    fn range<T>(key: &'static str, value: i64) -> Result<T, Error>
+    where
+        T: TryFrom<i64>,
+    {
+        value.try_into().map_err(|_| Error::ReftableRange { key, value })
+    }
+
+    let mut options = gix_ref::store::reftable::WriteOptions::default();
+    if let Some(value) = integer(config, "reftable.blockSize")? {
+        if !(0..=0x00ff_ffff).contains(&value) || (value != 0 && value < 32) {
+            return Err(Error::ReftableRange {
+                key: "reftable.blockSize",
+                value,
+            });
+        }
+        options.block_size = range("reftable.blockSize", value)?;
+    }
+    if let Some(value) = integer(config, "reftable.restartInterval")? {
+        options.restart_interval = range("reftable.restartInterval", value)?;
+    }
+    if let Some(value) = boolean(config, "reftable.indexObjects")? {
+        options.skip_index_objects = !value;
+    }
+    if let Some(value) = integer(config, "reftable.geometricFactor")? {
+        options.auto_compaction_factor = range("reftable.geometricFactor", value)?;
+    }
+    if let Some(value) = integer(config, "reftable.lockTimeout")? {
+        if value < -1 {
+            return Err(Error::ReftableRange {
+                key: "reftable.lockTimeout",
+                value,
+            });
+        }
+        options.lock_timeout_ms = value;
+    }
+    Ok(options)
 }
 
 fn load_config(

@@ -72,6 +72,8 @@ pub enum Error {
     #[cfg(feature = "sha256")]
     #[error("Failed to transfer in-memory configuration after adopting the remote's object format")]
     TransferInMemoryConfig(#[from] gix_config::file::init::Error),
+    #[error(transparent)]
+    RefTransaction(#[from] gix_ref::store::transaction::Error),
 }
 
 /// Modification

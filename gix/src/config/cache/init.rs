@@ -26,9 +26,11 @@ impl Cache {
             lossy,
             is_bare,
             object_hash,
+            ref_storage,
             reflog: _,
             precompose_unicode: _,
             protect_windows: _,
+            ..
         }: StageOne,
         git_dir: &std::path::Path,
         branch_name: Option<&gix_ref::FullNameRef>,
@@ -163,6 +165,7 @@ impl Cache {
             resolved: config.into(),
             use_multi_pack_index,
             object_hash,
+            ref_storage,
             #[cfg(feature = "revision")]
             object_kind_hint,
             static_pack_cache_limit_bytes,
@@ -305,8 +308,12 @@ impl crate::Repository {
     }
 
     fn apply_changed_values(&mut self) {
-        self.refs.write_reflog = util::reflog_or_default(self.config.reflog, self.workdir().is_some());
-        self.refs.namespace.clone_from(&self.config.refs_namespace);
+        self.refs
+            .set_write_reflog(util::reflog_or_default(self.config.reflog, self.workdir().is_some()));
+        self.refs.take_namespace();
+        if let Some(namespace) = self.config.refs_namespace.clone() {
+            self.refs.set_namespace(namespace);
+        }
     }
 }
 

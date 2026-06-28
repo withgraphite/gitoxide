@@ -24,7 +24,7 @@ required-features = ["blocking-network-client"]
 
 [features]
 
-default = ["max-performance-safe", "comfort", "basic", "extras", "auto-chain-error", "sha1"]
+default = ["max-performance-safe", "comfort", "basic", "extras", "auto-chain-error", "sha1", "reftable"]
 
 #! There are various categories of features which help to optimize performance and build times. `gix` comes with 'batteries included' and everything is
 #! enabled as long as it doesn't sacrifice compatibility. Most users will be fine with that but will pay with higher compile times than necessary as they
@@ -92,6 +92,7 @@ comfort = [
 sha1 = [
     "gix-hash/sha1",
     "gix-pack/sha1",
+    "gix-ref/sha1",
     "gix-worktree-stream?/sha1",
 ]
 
@@ -99,8 +100,12 @@ sha1 = [
 sha256 = [
     "gix-hash/sha256",
     "gix-pack/sha256",
+    "gix-ref/sha256",
     "gix-worktree-stream?/sha256",
 ]
+
+## Enable support for reading and writing reftable-backed reference stores using vendored C.
+reftable = ["gix-ref/reftable"]
 
 #! #### Components
 #!
@@ -338,7 +343,7 @@ cache-efficiency-debug = ["gix-features/cache-efficiency-debug"]
 gix-error = { version = "^0.2.4", path = "../gix-error" }
 gix-utils = { version = "^0.3.3", path = "../gix-utils" }
 gix-fs = { version = "^0.21.2", path = "../gix-fs" }
-gix-ref = { version = "^0.65.0", path = "../gix-ref" }
+gix-ref = { version = "^0.65.0", path = "../gix-ref", default-features = false }
 gix-discover = { version = "^0.53.0", path = "../gix-discover" }
 gix-tempfile = { version = "^23.0.0", path = "../gix-tempfile", default-features = false }
 gix-lock = { version = "^23.0.0", path = "../gix-lock" }

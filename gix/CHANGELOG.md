@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### New Features
+
+- Open and update reftable-backed repositories through the vendored C implementation.
+
 ### Bug Fixes
 
  - <csr-id-4773fd171ec12db75761052d8a5de4dc513f71ff/> Correctly use `$COMMON_DIR/info/exclude` to make excludes work in worktrees.

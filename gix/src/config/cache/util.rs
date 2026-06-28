@@ -93,7 +93,7 @@ pub(crate) fn reflog_or_default(
     config_reflog.unwrap_or(if has_worktree {
         gix_ref::store::WriteReflog::Normal
     } else {
-        gix_ref::store::WriteReflog::Disable
+        gix_ref::store::WriteReflog::Existing
     })
 }
 

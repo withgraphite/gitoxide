@@ -106,6 +106,15 @@ pub enum Error {
     ResolveIncludes(#[from] gix_config::file::includes::Error),
     #[error(transparent)]
     FromEnv(#[from] gix_config::file::init::from_env::Error),
+    #[cfg(feature = "reftable")]
+    #[error("Could not decode reftable configuration key {key}")]
+    ReftableValue {
+        key: &'static str,
+        source: gix_config::value::Error,
+    },
+    #[cfg(feature = "reftable")]
+    #[error("Reftable configuration key {key} has an out-of-range value: {value}")]
+    ReftableRange { key: &'static str, value: i64 },
     #[error("The path {path:?} at the 'core.worktree' configuration could not be interpolated")]
     PathInterpolation {
         path: BString,
@@ -588,6 +597,15 @@ pub mod transport {
     }
 }
 
+/// The configured reference storage backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RefStorage {
+    /// Loose and packed reference files.
+    Files,
+    /// Git reftable storage.
+    Reftable,
+}
+
 /// Utility type to keep pre-obtained configuration values, only for those required during initial setup
 /// and other basic operations that are common enough to warrant a permanent cache.
 ///
@@ -601,6 +619,9 @@ pub(crate) struct Cache {
     pub is_bare: Option<bool>,
     /// The type of hash to use.
     pub object_hash: gix_hash::Kind,
+    /// The reference storage backend to use.
+    #[allow(dead_code)]
+    pub ref_storage: RefStorage,
     /// If true, multi-pack indices, whether present or not, may be used by the object database.
     pub use_multi_pack_index: bool,
     /// The representation of `core.logallrefupdates`, or `None` if the variable wasn't set.

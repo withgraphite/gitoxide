@@ -57,7 +57,20 @@ pub mod store {
     ///
     pub mod init {
 
-        /// Options for use during [initialization](crate::file::Store::at).
+        /// Preferred reference storage backend when opening a store.
+        #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+        pub enum Storage {
+            /// Choose automatically based on on-disk layout (`reftable/` directory presence).
+            #[default]
+            Auto,
+            /// Loose and packed reference files.
+            Files,
+            /// Git reftable storage.
+            #[cfg(feature = "reftable")]
+            Reftable,
+        }
+
+        /// Options for use during [initialization](crate::Store::at).
         #[derive(Debug, Copy, Clone, Default)]
         pub struct Options {
             /// How to write the ref-log.
@@ -70,6 +83,25 @@ pub mod store {
             /// to avoid side effects. This only needs to be `true` on Windows, but can be `true` on other platforms
             /// if they need to remain compatible with Windows.
             pub prohibit_windows_device_names: bool,
+            /// Which storage backend to use, or [`Storage::Auto`] to detect from disk layout.
+            pub storage: Storage,
+            /// Options used when opening and writing C reftable stacks.
+            #[cfg(feature = "reftable")]
+            pub reftable: super::reftable::WriteOptions,
+        }
+
+        /// The error returned by [`crate::Store::at()`] and related constructors.
+        #[derive(Debug, thiserror::Error)]
+        #[allow(missing_docs)]
+        pub enum Error {
+            #[error("There was an error accessing the store's directory")]
+            Io(#[from] std::io::Error),
+            #[cfg(feature = "reftable")]
+            #[error(transparent)]
+            Reftable(#[from] crate::store::reftable::Error),
+            #[cfg(not(feature = "reftable"))]
+            #[error("reftable support is disabled")]
+            ReftableDisabled,
         }
     }
     /// The way a file store handles the reflog
@@ -80,22 +112,47 @@ pub mod store {
         /// Write a ref log for ref edits according to the standard rules.
         #[default]
         Normal,
+        /// Update reflogs that already exist without automatically creating new ones.
+        Existing,
         /// Never write a ref log.
         Disable,
     }
 
+    /// Backend-neutral reference iteration.
+    pub mod iter;
+    /// Backend-neutral reflog iteration.
+    pub mod log;
+    #[cfg(feature = "reftable")]
+    /// Reftable reference store support.
+    pub mod reftable;
+
+    /// Backend-neutral transactions for editing references.
+    pub mod transaction;
     /// A thread-local handle for interacting with a [`Store`][crate::Store] to find and iterate references.
     #[derive(Clone)]
     #[allow(dead_code)]
     pub(crate) struct Handle {
         /// A way to access shared state with the requirement that interior mutability doesn't leak or is incorporated into error types
         /// if it could. The latter can't happen if references to said internal aren't ever returned.
-        state: handle::State,
+        backend: handle::Backend,
     }
 
+    /// The kind of reference storage backend in use.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+    pub enum Kind {
+        /// Loose and packed reference files.
+        Files,
+        /// Git reftable storage.
+        #[cfg(feature = "reftable")]
+        Reftable,
+    }
+
+    #[derive(Debug, Clone)]
     #[allow(dead_code)]
-    pub(crate) enum State {
-        Loose { store: file::Store },
+    pub(crate) enum Backend {
+        File(file::Store),
+        #[cfg(feature = "reftable")]
+        Reftable(reftable::Store),
     }
 
     pub(crate) mod general;
@@ -109,10 +166,9 @@ pub mod store {
 }
 
 /// The git reference store.
-/// TODO: Figure out if handles are needed at all, which depends on the ref-table implementation.
-#[allow(dead_code)]
-pub(crate) struct Store {
-    inner: store::State,
+#[derive(Debug, Clone)]
+pub struct Store {
+    backend: store::Backend,
 }
 
 /// A validated complete and fully qualified reference name, safe to use for all operations.
