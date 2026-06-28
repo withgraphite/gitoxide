@@ -43,6 +43,8 @@ mod init {
                 object_hash,
                 precompose_unicode,
                 prohibit_windows_device_names,
+                storage: _,
+                ..
             }: crate::store::init::Options,
         ) -> Self {
             file::Store {
@@ -71,6 +73,8 @@ mod init {
                 object_hash,
                 precompose_unicode,
                 prohibit_windows_device_names,
+                storage: _,
+                ..
             }: crate::store::init::Options,
         ) -> Self {
             file::Store {

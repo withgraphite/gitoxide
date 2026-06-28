@@ -1,7 +1,5 @@
 mod reflog {
     mod packed {
-        use gix_ref::file::ReferenceExt;
-
         use crate::file;
 
         #[test]
@@ -18,6 +16,23 @@ mod reflog {
             let store = file::store_with_packed_refs()?;
             let r = store.find("main")?;
             assert_eq!(r.log_iter(&store).rev()?.expect("log exists").count(), 1);
+            Ok(())
+        }
+
+        #[test]
+        fn reverse_iteration_is_lazy() -> crate::Result {
+            let (_keep, store) = file::store_writable("make_packed_ref_repository.sh")?;
+            let r = store.find("main")?;
+            let mut platform = r.log_iter(&store);
+            let mut iter = platform.rev()?.expect("log exists");
+            std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(store.git_dir().join("logs/refs/heads/main"))?;
+            assert!(
+                iter.next().expect("the original file had one entry").is_err(),
+                "the file backend reads entries only when the iterator advances"
+            );
             Ok(())
         }
     }
@@ -48,7 +63,7 @@ mod reflog {
 
 mod peel {
     use gix_object::FindExt;
-    use gix_ref::{Reference, file::ReferenceExt};
+    use gix_ref::Reference;
 
     use crate::{
         file,

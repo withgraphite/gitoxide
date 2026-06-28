@@ -53,7 +53,7 @@ today's code and goals.
     * [ ] `push` and self-contained clone/fetch over `file://` and `ssh://` - mainly `gix`, `gix-protocol`, `gix-transport`, `gix-ssh`
 * **cross-cutting parity work**
     * [ ] hook discovery and execution - mainly `gix-hook`, `gix`, `gix-ref`, `gix-protocol`
-    * [ ] Git 3.0 compatibility (`SHA-256`, `reftable`) - mainly `gix-hash`, `gix-ref`, `gix-reftable`, `gix-protocol`, `gix-odb`
+    * [ ] Git 3.0 compatibility (`SHA-256`, `reftable`) - mainly `gix-hash`, `gix-ref`, `gix-reftable`, `gix-reftable-sys`, `gix-protocol`, `gix-odb`
     * [ ] partial clone, promisor and bundle bootstrapping - mainly `gix-odb`, `gix-pack`, `gix-bundle`, `gix-protocol`, `gix`
     * [ ] big-repo accelerators (`commit-graph`, bitmaps, split-index, sparse-index, fsmonitor, untracked-cache) - mainly `gix-commitgraph`, `gix-pack`, `gix-index`, `gix-status`, `gix-dir`
     * [ ] incremental ancestry exclusion during commit iteration - mainly `gix-revwalk`, `gix-traverse`, `gix-revision`, `gix-commitgraph`
@@ -1037,22 +1037,29 @@ See its [README.md](https://github.com/GitoxideLabs/gitoxide/blob/main/gix-lock/
       * [x] find single ref by name
       * [x] iterate refs with optional prefix
       * [x] handle unsorted packed refs and those without a header
-  * [ ] **[reftable][reftable-spec]**,
-    * see [here for a Go/C implementation][reftable-impl]
+  * [x] **[reftable][reftable-spec]** C-backed read and write backend
+    * see [Git's production implementation][reftable-impl]
 * [x] API documentation
     * [ ] Some examples
 
+### gix-reftable-sys
+
+Vendor Git's BSD-licensed C implementation and expose checked-in raw bindings.
+
+* [x] vendor Git's BSD-licensed C implementation with a portable gitoxide platform layer
+* [x] generate unsafe bindings from all public headers
+
 ### gix-reftable
 
-Provide a reftable backend for refs and reflogs as part of Git 3.0 compatibility.
+Provide safe gitoxide types for refs and reflogs as part of Git 3.0 compatibility.
 
-* [ ] read and write reftable stacks
-* [ ] transactions and reflogs
-* [ ] compaction and table management
-* [ ] backend selection and migration between `files` and `reftable`
+* [x] read and write reftable stacks through safe, lifetime-aware Rust handles
+* [x] transactions, reflogs, compaction, and table management
+* [x] backend selection between `files` and `reftable`
+* [ ] migration between `files` and `reftable`
 
 [reftable-spec]: https://github.com/eclipse/jgit/blob/master/Documentation/technical/reftable.md
-[reftable-impl]: https://github.com/google/reftable
+[reftable-impl]: https://github.com/git/git/tree/master/reftable
 [reftable-v2]: https://github.com/google/reftable/blob/master/reftable-v2-proposal.md
 [quarantine]: https://github.com/git/git/blob/master/Documentation/git-receive-pack.txt#L223:L223
 

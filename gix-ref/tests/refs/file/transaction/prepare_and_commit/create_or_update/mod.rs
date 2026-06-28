@@ -6,10 +6,7 @@ use gix_lock::acquire::Fail;
 use gix_object::bstr::{BString, ByteSlice};
 use gix_ref::{
     Target,
-    file::{
-        ReferenceExt,
-        transaction::{self, PackedRefs},
-    },
+    file::transaction::{self, PackedRefs},
     store::WriteReflog,
     transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
 };
@@ -496,7 +493,12 @@ fn windows_device_name_is_illegal_with_enabled_windows_protections() -> crate::R
 
 #[test]
 fn symbolic_head_missing_referent_then_update_referent() -> crate::Result {
-    for reflog_writemode in &[WriteReflog::Normal, WriteReflog::Disable, WriteReflog::Always] {
+    for reflog_writemode in &[
+        WriteReflog::Normal,
+        WriteReflog::Existing,
+        WriteReflog::Disable,
+        WriteReflog::Always,
+    ] {
         let (_keep, mut store) = empty_store()?;
         store.write_reflog = *reflog_writemode;
         let referent = "refs/heads/alt-main";
@@ -635,7 +637,7 @@ fn symbolic_head_missing_referent_then_update_referent() -> crate::Result {
                     let expected_line = log_line(crate::fixture_hash_kind().null(), new_oid, "an actual change");
                     assert_eq!(reflog_lines(&store, ref_name)?, vec![expected_line]);
                 }
-                WriteReflog::Disable => {
+                WriteReflog::Existing | WriteReflog::Disable => {
                     assert!(
                         store.reflog_iter(*ref_name, &mut buf)?.is_none(),
                         "nothing is ever written if its disabled"

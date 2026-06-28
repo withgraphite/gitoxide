@@ -2283,6 +2283,7 @@ dependencies = [
  "gix-object",
  "gix-odb",
  "gix-path",
+ "gix-reftable",
  "gix-tempfile",
  "gix-testtools",
  "gix-utils",
@@ -2290,6 +2291,7 @@ dependencies = [
  "insta",
  "memmap2",
  "serde",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 

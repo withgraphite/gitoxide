@@ -8,7 +8,10 @@ mod error {
     #[allow(missing_docs)]
     pub enum Error {
         #[error("An error occurred while finding a reference in the loose file database")]
-        Loose(#[from] crate::file::find::Error),
+        File(#[from] crate::file::find::Error),
+        #[cfg(feature = "reftable")]
+        #[error("An error occurred while finding a reference in the reftable database")]
+        Reftable(#[from] crate::store::reftable::Error),
         #[error("The ref name or path is not a valid ref name")]
         RefnameValidation(#[from] crate::name::Error),
     }
@@ -31,27 +34,44 @@ impl store::Handle {
         Name: TryInto<&'a PartialNameRef, Error = E>,
         Error: From<E>,
     {
-        let _name = partial.try_into()?;
-        match &self.state {
-            handle::State::Loose { store: _, .. } => {
-                todo!()
-            }
+        let partial = partial.try_into()?;
+        match &self.backend {
+            handle::Backend::File(store) => store.try_find(partial).map_err(Into::into),
+            #[cfg(feature = "reftable")]
+            handle::Backend::Reftable(store) => store.try_find(partial).map_err(Into::into),
         }
     }
 }
 
-mod existing {
-    mod error {
-        use std::path::PathBuf;
+impl crate::Store {
+    /// Try to find a reference by partial name.
+    pub fn try_find<'a, Name, E>(&self, partial: Name) -> Result<Option<Reference>, Error>
+    where
+        Name: TryInto<&'a PartialNameRef, Error = E>,
+        Error: From<E>,
+    {
+        let partial = partial.try_into()?;
+        match &self.backend {
+            store::Backend::File(store) => store.try_find(partial).map_err(Into::into),
+            #[cfg(feature = "reftable")]
+            store::Backend::Reftable(store) => store.try_find(partial).map_err(Into::into),
+        }
+    }
+}
 
-        /// The error returned by [file::Store::find_existing()][crate::file::Store::find_existing()].
+/// Errors and helpers for finding references that must exist.
+pub mod existing {
+    mod error {
+        use crate::PartialName;
+
+        /// The error returned when [`crate::Store::find()`] cannot locate a reference.
         #[derive(Debug, thiserror::Error)]
         #[allow(missing_docs)]
         pub enum Error {
             #[error("An error occurred while finding a reference in the database")]
             Find(#[from] crate::store::find::Error),
-            #[error("The ref partially named {name:?} could not be found")]
-            NotFound { name: PathBuf },
+            #[error("The ref partially named {:?} could not be found", name.as_ref().as_bstr())]
+            NotFound { name: PartialName },
         }
     }
 
@@ -61,18 +81,46 @@ mod existing {
 
     impl store::Handle {
         /// Similar to [`crate::file::Store::find()`] but a non-existing ref is treated as error.
-        pub fn find<'a, Name, E>(&self, _partial: Name) -> Result<Reference, Error>
+        pub fn find<'a, Name, E>(&self, partial: Name) -> Result<Reference, Error>
         where
-            Name: TryInto<&'a PartialNameRef, Error = E>,
-            crate::name::Error: From<E>,
+            Name: TryInto<&'a PartialNameRef, Error = E> + Clone,
+            crate::store::find::Error: From<E>,
         {
-            todo!()
-            // match self.try_find(partial) {}
-            // match self.find_one_with_verified_input(path.to_partial_path().as_ref(), packed) {
-            //     Ok(Some(r)) => Ok(r),
-            //     Ok(None) => Err(Error::NotFound(path.to_partial_path().into_owned())),
-            //     Err(err) => Err(err.into()),
-            // }
+            let path = partial.clone().try_into().map_err(crate::store::find::Error::from)?;
+            match self.try_find(partial)? {
+                Some(r) => Ok(r),
+                None => Err(Error::NotFound { name: path.to_owned() }),
+            }
+        }
+    }
+
+    impl crate::Store {
+        /// Similar to [`try_find()`][crate::Store::try_find], but a non-existing ref is treated as error.
+        pub fn find<'a, Name, E>(&self, partial: Name) -> Result<Reference, Error>
+        where
+            Name: TryInto<&'a PartialNameRef, Error = E> + Clone,
+            crate::store::find::Error: From<E>,
+        {
+            let path = partial.clone().try_into().map_err(crate::store::find::Error::from)?;
+            match self.try_find(partial)? {
+                Some(r) => Ok(r),
+                None => Err(Error::NotFound { name: path.to_owned() }),
+            }
+        }
+    }
+}
+
+impl From<crate::file::find::existing::Error> for existing::Error {
+    fn from(value: crate::file::find::existing::Error) -> Self {
+        match value {
+            crate::file::find::existing::Error::Find(err) => existing::Error::Find(err.into()),
+            crate::file::find::existing::Error::NotFound { name } => existing::Error::NotFound {
+                name: name
+                    .to_string_lossy()
+                    .into_owned()
+                    .try_into()
+                    .expect("file store reports valid partial names"),
+            },
         }
     }
 }

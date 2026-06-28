@@ -203,3 +203,16 @@ impl<T, E> ApplyLeniencyDefaultValue<T> for Result<T, E> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::reflog_or_default;
+    use gix_ref::store::WriteReflog;
+
+    #[test]
+    fn reflog_defaults_preserve_files_backend_behavior() {
+        assert_eq!(reflog_or_default(None, true), WriteReflog::Normal);
+        assert_eq!(reflog_or_default(None, false), WriteReflog::Disable);
+        assert_eq!(reflog_or_default(Some(WriteReflog::Always), false), WriteReflog::Always);
+    }
+}

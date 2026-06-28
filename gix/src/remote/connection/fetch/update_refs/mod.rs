@@ -327,11 +327,12 @@ pub(crate) fn update(
                 .map_err(crate::reference::edit::Error::from)?;
             repo.refs
                 .transaction()
+                .objects(&repo.objects)
                 .packed_refs(
                     match write_packed_refs {
                         fetch::WritePackedRefs::Only => {
-                            gix_ref::file::transaction::PackedRefs::DeletionsAndNonSymbolicUpdatesRemoveLooseSourceReference(Box::new(&repo.objects))},
-                        fetch::WritePackedRefs::Never => gix_ref::file::transaction::PackedRefs::DeletionsOnly
+                            gix_ref::store::transaction::PackedRefs::DeletionsAndNonSymbolicUpdatesRemoveLooseSourceReference(Box::new(&repo.objects))},
+                        fetch::WritePackedRefs::Never => gix_ref::store::transaction::PackedRefs::DeletionsOnly
                     }
                 )
                 .prepare(edits, file_lock_fail, packed_refs_lock_fail)

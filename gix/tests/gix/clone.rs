@@ -426,9 +426,9 @@ mod blocking_io {
             .cached_packed_buffer()?
             .expect("packed refs should be present");
         assert_eq!(
-            repo.refs.loose_iter()?.count(),
+            repo.refs.iter()?.pseudo()?.count(),
             1,
-            "HEAD is the only remaining loose symbolic ref as born remote symrefs are stored peeled"
+            "HEAD is the only remaining pseudo-reference as born remote symrefs are stored peeled"
         );
         assert_eq!(
             packed_refs.iter()?.count(),
@@ -443,7 +443,7 @@ mod blocking_io {
             .next()
             .expect("one line")?
             .signature
-            .to_owned()?;
+            .to_owned();
         assert_eq!(sig.name, "no name configured");
         assert_eq!(sig.email, "noEmailAvailable@example.com");
 
@@ -577,7 +577,7 @@ mod blocking_io {
         Ok(())
     }
 
-    fn assert_reflog(log: std::io::Result<Option<gix_ref::file::log::iter::Forward<'_>>>) {
+    fn assert_reflog(log: Result<Option<gix_ref::store::log::iter::Forward<'_>>, gix_ref::store::log::iter::Error>) {
         let lines = log
             .unwrap()
             .expect("log present")

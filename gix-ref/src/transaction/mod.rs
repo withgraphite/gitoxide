@@ -46,7 +46,7 @@ pub enum PreviousValue {
     Any,
     /// The reference must exist and may have any value.
     MustExist,
-    /// Create the ref only, hence the reference must not exist.
+    /// Create the ref only. An existing reference is accepted only when it already has the requested value.
     MustNotExist,
     /// The ref _must_ exist and have the given value.
     MustExistAndMatch(Target),

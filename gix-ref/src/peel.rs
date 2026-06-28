@@ -2,7 +2,7 @@
 pub mod to_id {
     use gix_object::bstr::BString;
 
-    /// The error returned by [`crate::file::ReferenceExt::peel_to_id()`].
+    /// The error returned by [`crate::Reference::peel_to_id()`].
     #[derive(Debug, thiserror::Error)]
     #[allow(missing_docs)]
     pub enum Error {
@@ -19,17 +19,21 @@ pub mod to_id {
 pub mod to_object {
     use std::path::PathBuf;
 
-    use crate::file;
-
-    /// The error returned by [`file::ReferenceExt::follow_to_object_packed()`].
+    /// The error returned by [`crate::Reference::follow_to_object_packed()`].
     #[derive(Debug, thiserror::Error)]
     #[allow(missing_docs)]
     pub enum Error {
         #[error("Could not follow a single level of a symbolic reference")]
-        Follow(#[from] file::find::existing::Error),
+        Follow(#[from] crate::store::find::existing::Error),
         #[error("Aborting due to reference cycle with first seen path being {start_absolute:?}")]
         Cycle { start_absolute: PathBuf },
         #[error("Refusing to follow more than {max_depth} levels of indirection")]
         DepthLimitExceeded { max_depth: usize },
+    }
+
+    impl From<crate::file::find::existing::Error> for Error {
+        fn from(value: crate::file::find::existing::Error) -> Self {
+            Error::Follow(value.into())
+        }
     }
 }
