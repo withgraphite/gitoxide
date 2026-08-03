@@ -972,3 +972,357 @@ fn reflog_messages_are_validated_and_truncated_before_publish() -> crate::Result
     );
     Ok(())
 }
+
+mod iter_from {
+    use gix_object::bstr::{BString, ByteSlice};
+    use gix_ref::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
+
+    use super::writable_store;
+
+    fn create(name: &str, target: gix_hash::ObjectId) -> crate::Result<RefEdit> {
+        Ok(RefEdit {
+            change: Change::Update {
+                log: LogChange {
+                    mode: RefLog::AndReference,
+                    force_create_reflog: false,
+                    message: BString::default(),
+                },
+                expected: PreviousValue::MustNotExist,
+                new: target.into(),
+            },
+            name: name.try_into()?,
+            deref: false,
+        })
+    }
+
+    /// Return a store with a few extra branches and tags, one of which was deleted again so the
+    /// stack may contain a tombstone, along with all listable ref names in order.
+    fn prepared_store() -> crate::Result<Option<(tempfile::TempDir, gix_ref::Store, Vec<BString>)>> {
+        let Some((fixture, mut store)) = writable_store()? else {
+            return Ok(None);
+        };
+        store.set_write_reflog(gix_ref::store::WriteReflog::Disable);
+        let target = store.find("main")?.target.try_id().expect("main is direct").to_owned();
+        store
+            .transaction()
+            .prepare(
+                [
+                    create("refs/heads/feature/a", target)?,
+                    create("refs/heads/feature/b", target)?,
+                    create("refs/heads/gone", target)?,
+                    create("refs/heads/zulu", target)?,
+                    create("refs/tags/v1", target)?,
+                    create("refs/tags/v2", target)?,
+                ],
+                gix_lock::acquire::Fail::Immediately,
+                gix_lock::acquire::Fail::Immediately,
+            )?
+            .commit(None)?;
+        store
+            .transaction()
+            .prepare(
+                [RefEdit {
+                    change: Change::Delete {
+                        expected: PreviousValue::MustExistAndMatch(target.into()),
+                        log: RefLog::AndReference,
+                    },
+                    name: "refs/heads/gone".try_into()?,
+                    deref: false,
+                }],
+                gix_lock::acquire::Fail::Immediately,
+                gix_lock::acquire::Fail::Immediately,
+            )?
+            .commit(None)?;
+
+        let all = store
+            .iter()?
+            .all()?
+            .map(|reference| reference.map(|reference| reference.name.into_inner()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert!(
+            all.iter().all(|name| name != "refs/heads/gone"),
+            "the deleted ref is not listable: {all:?}"
+        );
+        assert!(
+            all.windows(2).all(|pair| pair[0] < pair[1]),
+            "iteration is sorted by name without duplicates: {all:?}"
+        );
+        Ok(Some((fixture, store, all)))
+    }
+
+    #[test]
+    fn is_equivalent_to_skipping_names_before_from() -> crate::Result {
+        let Some((_fixture, store, all)) = prepared_store()? else {
+            return Ok(());
+        };
+
+        for (idx, name) in all.iter().enumerate() {
+            let resumed = store
+                .iter()?
+                .all_from(name.as_bstr())?
+                .map(|reference| reference.map(|reference| reference.name.into_inner()))
+                .collect::<Result<Vec<_>, _>>()?;
+            assert_eq!(
+                resumed,
+                all[idx..],
+                "all_from({name}) yields the given name and everything after it"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn from_skips_deleted_names_and_out_of_range_bounds() -> crate::Result {
+        let Some((_fixture, store, all)) = prepared_store()? else {
+            return Ok(());
+        };
+
+        let resumed = store
+            .iter()?
+            .all_from(b"refs/heads/gone".as_bstr())?
+            .map(|reference| reference.map(|reference| reference.name.into_inner()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let expected: Vec<_> = all
+            .iter()
+            .filter(|name| name.as_bstr() >= b"refs/heads/gone".as_bstr())
+            .cloned()
+            .collect();
+        assert_eq!(
+            resumed, expected,
+            "resuming at a deleted name starts at the next listable one"
+        );
+
+        let resumed = store
+            .iter()?
+            .all_from(b"refs/a".as_bstr())?
+            .map(|reference| reference.map(|reference| reference.name.into_inner()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(resumed, all, "a lower bound before all names yields everything");
+
+        assert_eq!(
+            store.iter()?.all_from(b"refs/tags/zzz".as_bstr())?.count(),
+            0,
+            "a lower bound after all names yields nothing"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn combines_with_prefix() -> crate::Result {
+        let Some((_fixture, store, _all)) = prepared_store()? else {
+            return Ok(());
+        };
+
+        let resumed = store
+            .iter()?
+            .prefixed_from(b"refs/heads/".try_into()?, b"refs/heads/feature/b".as_bstr())?
+            .map(|reference| reference.map(|reference| reference.name.into_inner()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            resumed,
+            ["refs/heads/feature/b", "refs/heads/main", "refs/heads/zulu"],
+            "iteration starts at `from` and remains limited to the prefix"
+        );
+
+        let resumed = store
+            .iter()?
+            .prefixed_from(b"refs/tags/".try_into()?, b"refs/heads/".as_bstr())?
+            .map(|reference| reference.map(|reference| reference.name.into_inner()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            resumed,
+            ["refs/tags/v1", "refs/tags/v2"],
+            "a lower bound before the prefix is clamped to the prefix"
+        );
+
+        assert_eq!(
+            store
+                .iter()?
+                .prefixed_from(b"refs/heads/".try_into()?, b"refs/tags/".as_bstr())?
+                .count(),
+            0,
+            "a lower bound after the prefixed range yields nothing"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn with_namespace() -> crate::Result {
+        let Some((_fixture, mut store, _all)) = prepared_store()? else {
+            return Ok(());
+        };
+        store.set_namespace(gix_ref::namespace::expand("tenant")?);
+        let target = crate::hex_to_id("1111111111111111111111111111111111111111");
+        store
+            .transaction()
+            .prepare(
+                [
+                    create("refs/heads/ns-a", target)?,
+                    create("refs/heads/ns-b", target)?,
+                    create("refs/tags/ns-tag", target)?,
+                ],
+                gix_lock::acquire::Fail::Immediately,
+                gix_lock::acquire::Fail::Immediately,
+            )?
+            .commit(None)?;
+
+        let all = store
+            .iter()?
+            .all()?
+            .map(|reference| reference.map(|reference| reference.name.into_inner()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            all,
+            ["refs/heads/ns-a", "refs/heads/ns-b", "refs/tags/ns-tag"],
+            "only namespaced refs are visible, without their namespace"
+        );
+        for (idx, name) in all.iter().enumerate() {
+            let resumed = store
+                .iter()?
+                .all_from(name.as_bstr())?
+                .map(|reference| reference.map(|reference| reference.name.into_inner()))
+                .collect::<Result<Vec<_>, _>>()?;
+            assert_eq!(
+                resumed,
+                all[idx..],
+                "all_from({name}) applies the namespace to the lower bound as well"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn pages_can_be_stitched_together() -> crate::Result {
+        let Some((_fixture, store, all)) = prepared_store()? else {
+            return Ok(());
+        };
+
+        let page_size = 2;
+        let mut pages = Vec::new();
+        let mut cursor: Option<BString> = None;
+        loop {
+            let platform = store.iter()?;
+            let iter = match cursor.as_ref() {
+                Some(cursor) => platform.all_from(cursor.as_bstr())?,
+                None => platform.all()?,
+            };
+            let page: Vec<_> = iter
+                .filter_map(|reference| {
+                    let name = reference.expect("no errors in fixture").name.into_inner();
+                    // Resume inclusively at the cursor, so drop the cursor name itself.
+                    (Some(&name) != cursor.as_ref()).then_some(name)
+                })
+                .take(page_size)
+                .collect();
+            if page.is_empty() {
+                break;
+            }
+            cursor = page.last().cloned();
+            pages.push(page);
+        }
+        let stitched: Vec<_> = pages.iter().flatten().cloned().collect();
+        assert_eq!(
+            stitched, all,
+            "resuming with the last returned name reconstructs the full listing"
+        );
+        assert!(
+            pages.iter().all(|page| page.len() <= page_size),
+            "pages honor their size limit"
+        );
+        Ok(())
+    }
+}
+
+#[test]
+fn linked_worktree_iteration_from_merges_stacks() -> crate::Result {
+    use gix_ref::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
+
+    let fixture = match crate::scripted_fixture_writable("make_reftable_repo.sh") {
+        Ok(root) => root,
+        Err(err) if *gix_testtools::GIT_VERSION < (2, 44, 0) => {
+            eprintln!("Fixture script failure ignored as it looks like Git isn't recent enough: {err}");
+            return Ok(());
+        }
+        Err(err) => return Err(err),
+    };
+    let repository = fixture.path().join("reftable-clone");
+    let worktree = fixture.path().join("linked");
+    let status = std::process::Command::new("git")
+        .args([
+            "-C",
+            repository.to_str().expect("UTF-8 fixture path"),
+            "worktree",
+            "add",
+            "-b",
+            "linked",
+            worktree.to_str().expect("UTF-8 fixture path"),
+            "main",
+        ])
+        .status()?;
+    assert!(status.success(), "Git creates a linked reftable worktree");
+
+    let mut options = crate::file::store_options();
+    options.write_reflog = gix_ref::store::WriteReflog::Disable;
+    let linked = gix_ref::Store::reftable_for_linked_worktree(
+        repository.join(".git/worktrees/linked"),
+        repository.join(".git"),
+        options,
+    )?;
+    let target = linked.find("main")?.target.try_id().expect("main is direct").to_owned();
+    let edit = |name: &str| -> crate::Result<RefEdit> {
+        Ok(RefEdit {
+            change: Change::Update {
+                log: LogChange {
+                    mode: RefLog::AndReference,
+                    force_create_reflog: false,
+                    message: BString::default(),
+                },
+                expected: PreviousValue::MustNotExist,
+                new: target.into(),
+            },
+            name: name.try_into()?,
+            deref: false,
+        })
+    };
+    linked
+        .transaction()
+        .prepare(
+            [
+                edit("refs/heads/shared-from-linked")?,
+                edit("refs/bisect/private-a")?,
+                edit("refs/bisect/private-z")?,
+            ],
+            gix_lock::acquire::Fail::Immediately,
+            gix_lock::acquire::Fail::Immediately,
+        )?
+        .commit(None)?;
+
+    let all = linked
+        .iter()?
+        .all()?
+        .map(|reference| reference.map(|reference| reference.name.into_inner()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(
+        all.iter().any(|name| name == "refs/bisect/private-a")
+            && all.iter().any(|name| name == "refs/heads/shared-from-linked"),
+        "iteration merges worktree-private and shared refs: {all:?}"
+    );
+    assert!(
+        all.windows(2).all(|pair| pair[0] < pair[1]),
+        "the merged iteration is sorted by name without duplicates: {all:?}"
+    );
+
+    for (idx, name) in all.iter().enumerate() {
+        let resumed = linked
+            .iter()?
+            .all_from(name.as_bstr())?
+            .map(|reference| reference.map(|reference| reference.name.into_inner()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            resumed,
+            all[idx..],
+            "all_from({name}) resumes the merged iteration at the given name"
+        );
+    }
+    Ok(())
+}

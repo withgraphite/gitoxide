@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::{
-    BStr, FullName, Namespace, Reference,
+    BStr, BString, FullName, Namespace, Reference,
     file::loose::{self, iter::SortedLoosePaths},
     store_impl::{file, packed},
 };
@@ -198,6 +198,14 @@ impl<'repo> Platform<'repo> {
         self.store.iter_packed(self.packed.as_ref().map(|b| &***b))
     }
 
+    /// As [`all(…)`](Self::all()), but starts iteration at the first reference whose name is equal
+    /// to `from` or greater than it lexicographically, skipping all references before it efficiently.
+    ///
+    /// This is useful to resume an iteration, for instance to serve sorted references page by page.
+    pub fn all_from<'p>(&'p self, from: &BStr) -> std::io::Result<LooseThenPacked<'p, 'repo>> {
+        self.store.iter_packed_from(self.packed.as_ref().map(|b| &***b), from)
+    }
+
     /// As [`iter(…)`](file::Store::iter()), but filters by `prefix`, i.e. "refs/heads/" or
     /// "refs/heads/feature-".
     ///
@@ -209,6 +217,20 @@ impl<'repo> Platform<'repo> {
     pub fn prefixed<'p>(&'p self, prefix: &RelativePath) -> std::io::Result<LooseThenPacked<'p, 'repo>> {
         self.store
             .iter_prefixed_packed(prefix, self.packed.as_ref().map(|b| &***b))
+    }
+
+    /// As [`prefixed(…)`](Self::prefixed()), but starts iteration at the first reference whose name
+    /// is equal to `from` or greater than it lexicographically, skipping all references before it
+    /// efficiently.
+    ///
+    /// This is useful to resume an iteration, for instance to serve sorted references page by page.
+    pub fn prefixed_from<'p>(
+        &'p self,
+        prefix: &RelativePath,
+        from: &BStr,
+    ) -> std::io::Result<LooseThenPacked<'p, 'repo>> {
+        self.store
+            .iter_prefixed_packed_from(prefix, self.packed.as_ref().map(|b| &***b), from)
     }
 
     /// Return an iterator over the pseudo references, like `HEAD` or `FETCH_HEAD`, or anything else suffixed with `HEAD`
@@ -277,23 +299,23 @@ impl<'a> IterInfo<'a> {
         }
     }
 
-    fn into_iter(self) -> Peekable<SortedLoosePaths> {
+    fn into_iter(self, seek: Option<BString>) -> Peekable<SortedLoosePaths> {
         match self {
             IterInfo::Base {
                 base,
                 precompose_unicode,
-            } => SortedLoosePaths::at(&base.join("refs"), base.into(), None, None, precompose_unicode),
+            } => SortedLoosePaths::at(&base.join("refs"), base.into(), None, seek, None, precompose_unicode),
             IterInfo::BaseAndIterRoot {
                 base,
                 iter_root,
                 prefix: _,
                 precompose_unicode,
-            } => SortedLoosePaths::at(&iter_root, base.into(), None, None, precompose_unicode),
+            } => SortedLoosePaths::at(&iter_root, base.into(), None, seek, None, precompose_unicode),
             IterInfo::PrefixAndBase {
                 base,
                 prefix,
                 precompose_unicode,
-            } => SortedLoosePaths::at(&base.join(prefix), base.into(), None, None, precompose_unicode),
+            } => SortedLoosePaths::at(&base.join(prefix), base.into(), None, seek, None, precompose_unicode),
             IterInfo::ComputedIterationRoot {
                 iter_root,
                 base,
@@ -303,13 +325,14 @@ impl<'a> IterInfo<'a> {
                 &iter_root,
                 base.into(),
                 Some(prefix.into_owned()),
+                seek,
                 None,
                 precompose_unicode,
             ),
             IterInfo::Pseudo {
                 base,
                 precompose_unicode,
-            } => SortedLoosePaths::at(base, base.into(), None, Some("HEAD".into()), precompose_unicode),
+            } => SortedLoosePaths::at(base, base.into(), None, seek, Some("HEAD".into()), precompose_unicode),
         }
         .peekable()
     }
@@ -347,6 +370,27 @@ impl file::Store {
         &'s self,
         packed: Option<&'p packed::Buffer>,
     ) -> std::io::Result<LooseThenPacked<'p, 's>> {
+        self.iter_packed_impl(packed, None)
+    }
+
+    /// As [`iter_packed(…)`](Self::iter_packed()), but starts iteration at the first reference
+    /// whose name is equal to `from` or greater than it lexicographically, skipping all references
+    /// before it efficiently.
+    ///
+    /// This is useful to resume an iteration, for instance to serve sorted references page by page.
+    pub fn iter_packed_from<'s, 'p>(
+        &'s self,
+        packed: Option<&'p packed::Buffer>,
+        from: &BStr,
+    ) -> std::io::Result<LooseThenPacked<'p, 's>> {
+        self.iter_packed_impl(packed, Some(from))
+    }
+
+    fn iter_packed_impl<'s, 'p>(
+        &'s self,
+        packed: Option<&'p packed::Buffer>,
+        from: Option<&BStr>,
+    ) -> std::io::Result<LooseThenPacked<'p, 's>> {
         match self.namespace.as_ref() {
             Some(namespace) => self.iter_from_info(
                 IterInfo::PrefixAndBase {
@@ -360,6 +404,7 @@ impl file::Store {
                     precompose_unicode: self.precompose_unicode,
                 }),
                 packed,
+                from.map(|from| namespace.to_owned().into_namespaced_from(from)),
             ),
             None => self.iter_from_info(
                 IterInfo::Base {
@@ -371,6 +416,7 @@ impl file::Store {
                     precompose_unicode: self.precompose_unicode,
                 }),
                 packed,
+                from.map(ToOwned::to_owned),
             ),
         }
     }
@@ -385,6 +431,7 @@ impl file::Store {
                 base: self.git_dir(),
                 precompose_unicode: self.precompose_unicode,
             },
+            None,
             None,
             None,
         )
@@ -402,6 +449,29 @@ impl file::Store {
         prefix: &RelativePath,
         packed: Option<&'p packed::Buffer>,
     ) -> std::io::Result<LooseThenPacked<'p, 's>> {
+        self.iter_prefixed_packed_impl(prefix, packed, None)
+    }
+
+    /// As [`iter_prefixed_packed(…)`](Self::iter_prefixed_packed()), but starts iteration at the
+    /// first reference whose name is equal to `from` or greater than it lexicographically, skipping
+    /// all references before it efficiently.
+    ///
+    /// This is useful to resume an iteration, for instance to serve sorted references page by page.
+    pub fn iter_prefixed_packed_from<'s, 'p>(
+        &'s self,
+        prefix: &RelativePath,
+        packed: Option<&'p packed::Buffer>,
+        from: &BStr,
+    ) -> std::io::Result<LooseThenPacked<'p, 's>> {
+        self.iter_prefixed_packed_impl(prefix, packed, Some(from))
+    }
+
+    fn iter_prefixed_packed_impl<'s, 'p>(
+        &'s self,
+        prefix: &RelativePath,
+        packed: Option<&'p packed::Buffer>,
+        from: Option<&BStr>,
+    ) -> std::io::Result<LooseThenPacked<'p, 's>> {
         match self.namespace.as_ref() {
             None => {
                 let git_dir_info = IterInfo::from_prefix(self.git_dir(), prefix, self.precompose_unicode)?;
@@ -409,7 +479,7 @@ impl file::Store {
                     .common_dir()
                     .map(|base| IterInfo::from_prefix(base, prefix, self.precompose_unicode))
                     .transpose()?;
-                self.iter_from_info(git_dir_info, common_dir_info, packed)
+                self.iter_from_info(git_dir_info, common_dir_info, packed, from.map(ToOwned::to_owned))
             }
             Some(namespace) => {
                 let prefix = namespace.to_owned().into_namespaced_prefix(prefix);
@@ -419,7 +489,12 @@ impl file::Store {
                     .common_dir()
                     .map(|base| IterInfo::from_prefix(base, prefix, self.precompose_unicode))
                     .transpose()?;
-                self.iter_from_info(git_dir_info, common_dir_info, packed)
+                self.iter_from_info(
+                    git_dir_info,
+                    common_dir_info,
+                    packed,
+                    from.map(|from| namespace.to_owned().into_namespaced_from(from)),
+                )
             }
         }
     }
@@ -429,6 +504,7 @@ impl file::Store {
         git_dir_info: IterInfo<'_>,
         common_dir_info: Option<IterInfo<'_>>,
         packed: Option<&'p packed::Buffer>,
+        from: Option<BString>,
     ) -> std::io::Result<LooseThenPacked<'p, 's>> {
         Ok(LooseThenPacked {
             git_dir: self.git_dir(),
@@ -436,17 +512,19 @@ impl file::Store {
             object_hash: self.object_hash,
             iter_packed: match packed {
                 Some(packed) => Some(
-                    match git_dir_info.prefix() {
-                        Some(prefix) => packed.iter_prefixed(prefix.into_owned()),
-                        None => packed.iter(),
+                    match (git_dir_info.prefix(), from.as_ref()) {
+                        (Some(prefix), Some(from)) => packed.iter_prefixed_from(prefix.into_owned(), from.as_bstr()),
+                        (Some(prefix), None) => packed.iter_prefixed(prefix.into_owned()),
+                        (None, Some(from)) => packed.iter_from(from.as_bstr()),
+                        (None, None) => packed.iter(),
                     }
                     .map_err(std::io::Error::other)?
                     .peekable(),
                 ),
                 None => None,
             },
-            iter_git_dir: git_dir_info.into_iter(),
-            iter_common_dir: common_dir_info.map(IterInfo::into_iter),
+            iter_git_dir: git_dir_info.into_iter(from.clone()),
+            iter_common_dir: common_dir_info.map(|info| info.into_iter(from)),
             buf: Vec::new(),
             namespace: self.namespace.as_ref(),
         })

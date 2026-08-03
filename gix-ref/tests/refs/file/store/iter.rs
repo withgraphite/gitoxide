@@ -667,3 +667,131 @@ fn overlay_partial_prefix_iter_when_prefix_is_dir() -> crate::Result {
 
     Ok(())
 }
+
+mod overlay_iter_from {
+    use gix_object::bstr::{BString, ByteSlice};
+
+    use crate::file::store_at;
+
+    fn overlay_names(store: &gix_ref::file::Store) -> crate::Result<Vec<BString>> {
+        Ok(store
+            .iter()?
+            .all()?
+            .map(|r| r.map(|r| r.name.into_inner()))
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    #[test]
+    fn is_equivalent_to_skipping_names_before_from() -> crate::Result {
+        let store = store_at("make_packed_ref_repository_for_overlay.sh")?;
+        let all = overlay_names(&store)?;
+        assert!(all.len() > 2, "the fixture has a few refs, loose and packed");
+
+        for (idx, name) in all.iter().enumerate() {
+            let resumed = store
+                .iter()?
+                .all_from(name.as_bstr())?
+                .map(|r| r.map(|r| r.name.into_inner()))
+                .collect::<Result<Vec<_>, _>>()?;
+            assert_eq!(
+                resumed,
+                all[idx..],
+                "all_from({name}) yields the given name and everything after it"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn from_between_names_before_all_or_after_all() -> crate::Result {
+        let store = store_at("make_packed_ref_repository_for_overlay.sh")?;
+        let all = overlay_names(&store)?;
+
+        let resumed = store
+            .iter()?
+            .all_from(b"refs/heads/main0".as_bstr())?
+            .map(|r| r.map(|r| r.name.into_inner()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let expected: Vec<_> = all
+            .iter()
+            .filter(|name| name.as_bstr() > b"refs/heads/main0".as_bstr())
+            .cloned()
+            .collect();
+        assert_eq!(
+            resumed, expected,
+            "a lower bound between two names starts at the next greater name"
+        );
+
+        let resumed = store
+            .iter()?
+            .all_from(b"refs/h".as_bstr())?
+            .map(|r| r.map(|r| r.name.into_inner()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(resumed, all, "a lower bound before all names yields everything");
+
+        assert_eq!(
+            store.iter()?.all_from(b"refs/tags/zzz".as_bstr())?.count(),
+            0,
+            "a lower bound after all names yields nothing"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn combines_with_prefix() -> crate::Result {
+        let store = store_at("make_packed_ref_repository_for_overlay.sh")?;
+
+        let resumed = store
+            .iter()?
+            .prefixed_from(b"refs/heads/".try_into()?, b"refs/heads/main".as_bstr())?
+            .map(|r| r.map(|r| r.name.into_inner()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            resumed,
+            ["refs/heads/main", "refs/heads/newer-as-loose"],
+            "iteration starts at `from` and remains limited to the prefix"
+        );
+
+        let resumed = store
+            .iter()?
+            .prefixed_from(b"refs/heads/".try_into()?, b"refs/a".as_bstr())?
+            .map(|r| r.map(|r| r.name.into_inner()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            resumed,
+            ["refs/heads/A", "refs/heads/main", "refs/heads/newer-as-loose"],
+            "a lower bound before the prefix is clamped to the prefix"
+        );
+
+        assert_eq!(
+            store
+                .iter()?
+                .prefixed_from(b"refs/heads/".try_into()?, b"refs/remotes/".as_bstr())?
+                .count(),
+            0,
+            "a lower bound after the prefixed range yields nothing"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn with_namespace() -> crate::Result {
+        let mut store = store_at("make_namespaced_packed_ref_repository.sh")?;
+        store.namespace = gix_ref::namespace::expand("bar")?.into();
+
+        let all = overlay_names(&store)?;
+        for (idx, name) in all.iter().enumerate() {
+            let resumed = store
+                .iter()?
+                .all_from(name.as_bstr())?
+                .map(|r| r.map(|r| r.name.into_inner()))
+                .collect::<Result<Vec<_>, _>>()?;
+            assert_eq!(
+                resumed,
+                all[idx..],
+                "all_from({name}) applies the namespace to the lower bound as well"
+            );
+        }
+        Ok(())
+    }
+}

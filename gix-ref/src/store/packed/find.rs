@@ -91,7 +91,13 @@ impl packed::Buffer {
         .map_err(|pos| {
             (
                 encountered_parse_failure,
-                packed::decode::record_start_at_offset(a, pos),
+                // `name` sorts after all records if and only if the insertion position is past
+                // the last byte, which must not be pulled back into the last record.
+                if pos == a.len() {
+                    pos
+                } else {
+                    packed::decode::record_start_at_offset(a, pos)
+                },
             )
         })
     }

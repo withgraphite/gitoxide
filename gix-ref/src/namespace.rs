@@ -25,6 +25,13 @@ impl Namespace {
         self.0.push_str(prefix);
         gix_path::to_unix_separators_on_windows(self.0).into_owned()
     }
+
+    /// Append the given `from` reference name lower bound to this namespace so it can be
+    /// compared to iterated names that still contain the namespace.
+    pub(crate) fn into_namespaced_from(mut self, from: &BStr) -> BString {
+        self.0.push_str(from);
+        self.0
+    }
     pub(crate) fn into_namespaced_name(mut self, name: &FullNameRef) -> FullName {
         self.0.push_str(name.as_bstr());
         FullName(self.0)

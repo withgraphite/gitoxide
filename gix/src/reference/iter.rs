@@ -1,6 +1,7 @@
 //!
 #![allow(clippy::empty_docs)]
 
+use gix_object::bstr::BStr;
 use gix_path::RelativePath;
 
 /// A platform to create iterators over references.
@@ -40,6 +41,14 @@ impl<'repo> Platform<'repo> {
         Ok(Iter::new(self.repo, self.platform.all()?))
     }
 
+    /// As [`all(…)`](Self::all()), but starts iteration at the first reference whose name is equal
+    /// to `from` or greater than it lexicographically, skipping all references before it efficiently.
+    ///
+    /// This is useful to resume an iteration, for instance to serve sorted references page by page.
+    pub fn all_from<'a>(&self, from: impl Into<&'a BStr>) -> Result<Iter<'_, 'repo>, init::Error> {
+        Ok(Iter::new(self.repo, self.platform.all_from(from.into())?))
+    }
+
     /// Return an iterator over all references that match the given `prefix`.
     ///
     /// These are of the form `refs/heads/` or `refs/remotes/origin`, and must not contain relative paths components like `.` or `..`.
@@ -48,6 +57,22 @@ impl<'repo> Platform<'repo> {
         prefix: impl TryInto<&'a RelativePath, Error = gix_path::relative_path::Error>,
     ) -> Result<Iter<'_, 'repo>, init::Error> {
         Ok(Iter::new(self.repo, self.platform.prefixed(prefix.try_into()?)?))
+    }
+
+    /// As [`prefixed(…)`](Self::prefixed()), but starts iteration at the first reference whose
+    /// name is equal to `from` or greater than it lexicographically, skipping all references
+    /// before it efficiently.
+    ///
+    /// This is useful to resume an iteration, for instance to serve sorted references page by page.
+    pub fn prefixed_from<'a, 'b>(
+        &self,
+        prefix: impl TryInto<&'a RelativePath, Error = gix_path::relative_path::Error>,
+        from: impl Into<&'b BStr>,
+    ) -> Result<Iter<'_, 'repo>, init::Error> {
+        Ok(Iter::new(
+            self.repo,
+            self.platform.prefixed_from(prefix.try_into()?, from.into())?,
+        ))
     }
 
     /// Return an iterator over all references that are tags.

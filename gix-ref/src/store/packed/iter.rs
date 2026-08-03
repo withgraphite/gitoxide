@@ -1,4 +1,4 @@
-use gix_object::bstr::{BString, ByteSlice};
+use gix_object::bstr::{BStr, BString, ByteSlice};
 
 use crate::store_impl::{packed, packed::decode};
 
@@ -13,6 +13,13 @@ impl packed::Buffer {
         packed::Iter::new(self.as_ref(), self.object_hash)
     }
 
+    /// Like [`iter()`](Self::iter()), but starts at the first reference whose name is equal to
+    /// `from` or greater than it lexicographically, skipping all references before it in `log(n)` time.
+    pub fn iter_from(&self, from: &BStr) -> Result<packed::Iter<'_>, packed::iter::Error> {
+        let first_record = self.binary_search_by(from).unwrap_or_else(|(_, pos)| pos);
+        packed::Iter::new(&self.as_ref()[first_record..], self.object_hash)
+    }
+
     /// Return an iterator yielding only references matching the given prefix, ordered by reference name.
     pub fn iter_prefixed(&self, prefix: BString) -> Result<packed::Iter<'_>, packed::iter::Error> {
         let first_record_with_prefix = self.binary_search_by(prefix.as_bstr()).unwrap_or_else(|(_, pos)| pos);
@@ -21,6 +28,17 @@ impl packed::Buffer {
             self.object_hash,
             Some(prefix),
         )
+    }
+
+    /// Like [`iter_prefixed()`](Self::iter_prefixed()), but starts at the first reference whose name
+    /// is equal to `from` or greater than it lexicographically, skipping all references before it
+    /// in `log(n)` time.
+    ///
+    /// A `from` before the first name matching `prefix` is equivalent to `iter_prefixed(…)`.
+    pub fn iter_prefixed_from(&self, prefix: BString, from: &BStr) -> Result<packed::Iter<'_>, packed::iter::Error> {
+        let start = from.max(prefix.as_bstr());
+        let first_record = self.binary_search_by(start).unwrap_or_else(|(_, pos)| pos);
+        packed::Iter::new_with_prefix(&self.as_ref()[first_record..], self.object_hash, Some(prefix))
     }
 }
 

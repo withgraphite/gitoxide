@@ -1,3 +1,4 @@
+use gix_object::bstr::BStr;
 use gix_path::RelativePath;
 
 use crate::{Reference, file};
@@ -60,6 +61,22 @@ impl Platform<'_> {
         }
     }
 
+    /// As [`all(…)`](Self::all()), but starts iteration at the first reference whose name is equal
+    /// to `from` or greater than it lexicographically, skipping all references before it efficiently.
+    ///
+    /// This is useful to resume an iteration, for instance to serve sorted references page by page.
+    pub fn all_from(&self, from: &BStr) -> Result<Iter<'_>, Error> {
+        match &self.inner {
+            platform::Inner::File(platform) => {
+                Ok(Iter::new(platform.all_from(from)?.map(|res| res.map_err(Into::into))))
+            }
+            #[cfg(feature = "reftable")]
+            platform::Inner::Reftable(store) => Ok(Iter::new(
+                store.iter_from(None, from)?.map(|res| res.map_err(Into::into)),
+            )),
+        }
+    }
+
     /// Return an iterator over all references matching `prefix`.
     pub fn prefixed(&self, prefix: &RelativePath) -> Result<Iter<'_>, Error> {
         match &self.inner {
@@ -69,6 +86,25 @@ impl Platform<'_> {
             #[cfg(feature = "reftable")]
             platform::Inner::Reftable(store) => Ok(Iter::new(
                 store.iter(Some(prefix.as_ref()))?.map(|res| res.map_err(Into::into)),
+            )),
+        }
+    }
+
+    /// As [`prefixed(…)`](Self::prefixed()), but starts iteration at the first reference whose name
+    /// is equal to `from` or greater than it lexicographically, skipping all references before it
+    /// efficiently.
+    ///
+    /// This is useful to resume an iteration, for instance to serve sorted references page by page.
+    pub fn prefixed_from(&self, prefix: &RelativePath, from: &BStr) -> Result<Iter<'_>, Error> {
+        match &self.inner {
+            platform::Inner::File(platform) => Ok(Iter::new(
+                platform.prefixed_from(prefix, from)?.map(|res| res.map_err(Into::into)),
+            )),
+            #[cfg(feature = "reftable")]
+            platform::Inner::Reftable(store) => Ok(Iter::new(
+                store
+                    .iter_from(Some(prefix.as_ref()), from)?
+                    .map(|res| res.map_err(Into::into)),
             )),
         }
     }

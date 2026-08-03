@@ -252,3 +252,50 @@ mod head {
         Ok(())
     }
 }
+
+mod iter_from {
+    use gix::bstr::{BString, ByteSlice};
+
+    #[test]
+    fn all_from_and_prefixed_from_resume_sorted_iteration() -> crate::Result {
+        let repo = crate::named_repo("make_references_repo.sh")?;
+
+        let all: Vec<BString> = repo
+            .references()?
+            .all()?
+            .filter_map(Result::ok)
+            .map(|r| r.name().as_bstr().to_owned())
+            .collect();
+        assert!(all.len() > 2, "the fixture has plenty of references");
+
+        for (idx, name) in all.iter().enumerate() {
+            let resumed: Vec<BString> = repo
+                .references()?
+                .all_from(name.as_bstr())?
+                .filter_map(Result::ok)
+                .map(|r| r.name().as_bstr().to_owned())
+                .collect();
+            assert_eq!(
+                resumed,
+                all[idx..],
+                "all_from({name}) yields the given name and everything after it"
+            );
+        }
+
+        let heads: Vec<BString> = repo
+            .references()?
+            .prefixed("refs/heads/")?
+            .filter_map(Result::ok)
+            .map(|r| r.name().as_bstr().to_owned())
+            .collect();
+        let second = heads.get(1).expect("more than one branch");
+        let resumed: Vec<BString> = repo
+            .references()?
+            .prefixed_from("refs/heads/", second.as_bstr())?
+            .filter_map(Result::ok)
+            .map(|r| r.name().as_bstr().to_owned())
+            .collect();
+        assert_eq!(resumed, heads[1..], "prefixed_from resumes within the prefixed range");
+        Ok(())
+    }
+}

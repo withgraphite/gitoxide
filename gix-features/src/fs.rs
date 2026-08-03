@@ -250,6 +250,16 @@ pub mod walkdir {
 
     /// The Iterator yielding directory items
     pub type DirEntryIter = super::walkdir_precompose::WalkDirIter<walkdir::IntoIter, DirEntryImpl, walkdir::Error>;
+
+    impl DirEntryIter {
+        /// Stop traversing the contents of the least recently yielded directory.
+        ///
+        /// Call this right after an entry for a directory was yielded to avoid descending into it.
+        /// See [`walkdir::IntoIter::skip_current_dir()`] for details.
+        pub fn skip_current_dir(&mut self) {
+            self.inner.skip_current_dir();
+        }
+    }
 }
 
 #[cfg(feature = "walkdir")]
