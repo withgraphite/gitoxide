@@ -282,9 +282,21 @@ impl Stack {
 
     /// Start iterating references in key order.
     pub fn references(&mut self) -> Result<RefIter<'_>, Error> {
+        self.init_ref_iter()
+    }
+
+    /// Like [`references()`](Stack::references), but consumes the stack so the returned iterator
+    /// can be stored and moved freely instead of borrowing the stack.
+    pub fn into_references(mut self) -> Result<OwnedRefIter, Error> {
+        let iter = self.init_ref_iter()?;
+        Ok(OwnedRefIter { iter, _stack: self })
+    }
+
+    fn init_ref_iter<'a>(&mut self) -> Result<RefIter<'a>, Error> {
         // SAFETY: a zeroed iterator is the C API's documented uninitialized state.
         let mut raw: Box<raw::RefIterator> = Box::new(unsafe { std::mem::zeroed() });
-        // SAFETY: the stack is exclusively borrowed for the iterator lifetime.
+        // SAFETY: the C iterator borrows the heap-allocated C stack, which the caller keeps alive
+        // for the (freely chosen) iterator lifetime.
         let result = unsafe { raw::reftable_stack_init_ref_iterator(self.raw.as_ptr(), raw.as_mut()) };
         check(result, "create reference iterator")?;
         Ok(RefIter {
@@ -478,6 +490,32 @@ impl Drop for RefIter<'_> {
             raw::reftable_ref_record_release(&mut self.record);
             raw::reftable_iterator_destroy(self.raw.as_mut());
         }
+    }
+}
+
+/// A reference iterator that owns the stack it reads from, created with
+/// [`Stack::into_references()`].
+pub struct OwnedRefIter {
+    // The C iterator points into stack-owned data; `iter` is declared first so it is dropped
+    // before the stack it borrows from.
+    iter: RefIter<'static>,
+    _stack: Stack,
+}
+
+// SAFETY: like `Stack`, the C iterator has no thread affinity and safe methods require `&mut`.
+unsafe impl Send for OwnedRefIter {}
+
+impl OwnedRefIter {
+    /// Seek so the next record is at or after `name`.
+    pub fn seek(&mut self, name: &[u8]) -> Result<(), Error> {
+        self.iter.seek(name)
+    }
+
+    /// Return the next record, or `None` at end of input.
+    ///
+    /// The record borrows this iterator and must be dropped before seeking or advancing again.
+    pub fn next_record(&mut self) -> Result<Option<RefRecord<'_>>, Error> {
+        self.iter.next_record()
     }
 }
 
