@@ -56,7 +56,7 @@ impl Platform<'_> {
         match &self.inner {
             platform::Inner::File(platform) => Ok(Iter::new(platform.all()?.map(|res| res.map_err(Into::into)))),
             #[cfg(feature = "reftable")]
-            platform::Inner::Reftable(store) => Ok(Iter::new(store.iter(None)?.into_iter().map(Ok))),
+            platform::Inner::Reftable(store) => Ok(Iter::new(store.iter(None)?.map(|res| res.map_err(Into::into)))),
         }
     }
 
@@ -67,7 +67,9 @@ impl Platform<'_> {
                 Ok(Iter::new(platform.prefixed(prefix)?.map(|res| res.map_err(Into::into))))
             }
             #[cfg(feature = "reftable")]
-            platform::Inner::Reftable(store) => Ok(Iter::new(store.iter(Some(prefix.as_ref()))?.into_iter().map(Ok))),
+            platform::Inner::Reftable(store) => Ok(Iter::new(
+                store.iter(Some(prefix.as_ref()))?.map(|res| res.map_err(Into::into)),
+            )),
         }
     }
 
